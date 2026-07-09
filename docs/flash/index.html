@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodexMeter ESP32-C3 网页刷机工具</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <script src="https://code.iconify.design/iconify-icon/2.3.0/iconify-icon.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter,
+          "Segoe UI",
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        color: #07111f;
+        background: #eaf3ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 7% 6%, rgba(37, 99, 235, 0.18), transparent 24%),
+          radial-gradient(circle at 90% 0%, rgba(147, 197, 253, 0.42), transparent 28%),
+          radial-gradient(circle at 16% 100%, rgba(37, 99, 235, 0.16), transparent 24%),
+          linear-gradient(135deg, #f8fbff 0%, #edf5ff 52%, #dbeafe 100%);
+        overflow-x: hidden;
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      body::before {
+        inset: 0;
+        opacity: 0.34;
+        background-image: radial-gradient(#93c5fd 1.2px, transparent 1.2px);
+        background-size: 18px 18px;
+        mask-image: radial-gradient(circle at 94% 12%, #000 0 18%, transparent 32%);
+      }
+
+      body::after {
+        width: 560px;
+        height: 260px;
+        right: -120px;
+        bottom: -90px;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.09);
+        filter: blur(8px);
+      }
+
+      .page {
+        position: relative;
+        z-index: 1;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 32px 44px;
+      }
+
+      .canvas {
+        width: min(1510px, 100%);
+        min-height: min(760px, calc(100vh - 64px));
+        display: grid;
+        grid-template-columns: minmax(820px, 1.08fr) 1px minmax(430px, 0.68fr);
+        gap: 34px;
+        padding: clamp(28px, 3.2vw, 48px);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 30px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.92)),
+          #ffffff;
+        box-shadow:
+          0 36px 90px rgba(37, 99, 235, 0.18),
+          inset 0 1px 0 rgba(255, 255, 255, 0.92);
+      }
+
+      .divider {
+        width: 1px;
+        min-height: 100%;
+        background: linear-gradient(180deg, transparent, #cbd9ea 12%, #cbd9ea 86%, transparent);
+      }
+
+      .left {
+        display: grid;
+        grid-template-columns: minmax(500px, 0.62fr) minmax(320px, 0.38fr);
+        grid-template-rows: minmax(372px, auto) auto;
+        column-gap: 28px;
+        align-content: space-between;
+        align-items: start;
+        min-width: 0;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        width: fit-content;
+        max-width: 100%;
+        min-height: 44px;
+        padding: 0 20px;
+        border: 1px solid rgba(37, 99, 235, 0.26);
+        border-radius: 999px;
+        color: #2563eb;
+        background: linear-gradient(180deg, rgba(239, 246, 255, 0.86), rgba(255, 255, 255, 0.72));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+        font-size: 18px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .badge iconify-icon {
+        font-size: 22px;
+      }
+
+      h1 {
+        margin: 32px 0 0;
+        max-width: 620px;
+        color: #07111f;
+        font-size: clamp(48px, 4vw, 64px);
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      h1 .line {
+        display: block;
+        white-space: nowrap;
+      }
+
+      h1 span {
+        color: #2563eb;
+        white-space: nowrap;
+      }
+
+      .summary {
+        max-width: 610px;
+        margin: 26px 0 0;
+        color: #334155;
+        font-size: 18px;
+        line-height: 1.65;
+      }
+
+      .hero-visual {
+        position: relative;
+        align-self: start;
+        justify-self: end;
+        width: min(390px, 100%);
+        min-width: 320px;
+        aspect-ratio: 1.08;
+        margin-top: 58px;
+        margin-left: 0;
+        margin-right: 0;
+      }
+
+      .device-sketch {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+        filter: drop-shadow(0 28px 28px rgba(37, 99, 235, 0.16));
+      }
+
+      .device-sketch .wire {
+        fill: none;
+        stroke: #9ee7f5;
+        stroke-width: 2.2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        opacity: 0.46;
+      }
+
+      .device-sketch .wire-dot {
+        fill: #8de4f4;
+        opacity: 0.5;
+      }
+
+      .device-sketch .base-fill {
+        stroke: #9cc5ff;
+        stroke-width: 3;
+      }
+
+      .device-sketch .body {
+        stroke: #9cc5ff;
+        stroke-width: 4;
+      }
+
+      .device-sketch .side {
+        opacity: 0.72;
+      }
+
+      .device-sketch .screen {
+        stroke: #6ea8ff;
+        stroke-width: 4;
+      }
+
+      .device-sketch .code {
+        fill: none;
+        stroke: #ffffff;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .device-sketch .led-bar {
+        fill: url(#ledGrad);
+      }
+
+      .device-sketch .led {
+        fill: #b8edff;
+      }
+
+      .device-sketch .shadow {
+        fill: #bfdbfe;
+        opacity: 0.34;
+      }
+
+      .features {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .feature {
+        min-height: 158px;
+        padding: 20px;
+        border: 1px solid rgba(147, 197, 253, 0.56);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.68);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+      }
+
+      .feature-icon {
+        display: grid;
+        place-items: center;
+        width: 54px;
+        height: 54px;
+        border-radius: 18px;
+        color: #2563eb;
+        background: linear-gradient(180deg, #eff6ff, #dbeafe);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      }
+
+      .feature-icon iconify-icon {
+        font-size: 32px;
+      }
+
+      .feature strong {
+        display: block;
+        margin-top: 16px;
+        color: #07111f;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .feature span {
+        display: block;
+        margin-top: 8px;
+        color: #475569;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+
+      .right {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .right h2 {
+        margin: 0;
+        color: #07111f;
+        font-size: 34px;
+        letter-spacing: 0;
+      }
+
+      .right > p {
+        margin: 12px 0 24px;
+        color: #475569;
+        font-size: 17px;
+        line-height: 1.55;
+      }
+
+      .steps {
+        display: grid;
+        gap: 12px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .steps li {
+        display: grid;
+        grid-template-columns: 40px 34px minmax(0, 1fr);
+        align-items: center;
+        gap: 14px;
+        min-height: 64px;
+        padding: 12px 18px 12px 12px;
+        border: 1px solid rgba(147, 197, 253, 0.48);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 12px 28px rgba(37, 99, 235, 0.06);
+      }
+
+      .steps b {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 11px;
+        color: #ffffff;
+        background: linear-gradient(180deg, #2563eb, #1d4ed8);
+        box-shadow: 0 8px 16px rgba(37, 99, 235, 0.26);
+        font-size: 21px;
+      }
+
+      .steps iconify-icon {
+        color: #2563eb;
+        font-size: 29px;
+      }
+
+      .steps span {
+        color: #1f2937;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      .steps a {
+        color: #2563eb;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .installer {
+        position: relative;
+        min-height: 132px;
+        margin-top: 20px;
+        padding: 22px 160px 22px 24px;
+        overflow: hidden;
+        border: 1px solid rgba(37, 99, 235, 0.28);
+        border-radius: 18px;
+        background:
+          radial-gradient(circle at 88% 45%, rgba(96, 165, 250, 0.28), transparent 32%),
+          linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(255, 255, 255, 0.88));
+      }
+
+      .installer-label {
+        margin: 0 0 14px;
+        color: #1e3a8a;
+        font-size: 16px;
+        font-weight: 850;
+      }
+
+      .installer-label span {
+        color: #2563eb;
+        margin-left: 8px;
+      }
+
+      .shield {
+        position: absolute;
+        right: 24px;
+        bottom: 0;
+        width: 118px;
+        height: 118px;
+        opacity: 0.82;
+        color: #bfdbfe;
+      }
+
+      .shield iconify-icon {
+        font-size: 118px;
+        filter: drop-shadow(0 14px 18px rgba(37, 99, 235, 0.18));
+      }
+
+      .note {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 10px;
+        margin-top: 18px;
+        padding: 14px 18px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
+        color: #475569;
+        background: rgba(248, 250, 252, 0.72);
+        font-size: 14px;
+        line-height: 1.62;
+      }
+
+      .note iconify-icon {
+        color: #2563eb;
+        font-size: 23px;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 7px;
+        color: #1e3a8a;
+        background: #dbeafe;
+        font-weight: 750;
+      }
+
+      @media (max-width: 1180px) {
+        .page {
+          padding: 28px;
+        }
+
+        .canvas {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+
+        .left {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .divider {
+          display: none;
+        }
+
+        .hero-visual {
+          display: none;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .page {
+          padding: 16px;
+        }
+
+        .canvas {
+          padding: 24px;
+          border-radius: 24px;
+        }
+
+        h1 {
+          font-size: 44px;
+        }
+
+        .summary,
+        .right > p {
+          font-size: 16px;
+        }
+
+        .features {
+          grid-template-columns: 1fr;
+        }
+
+        .steps li {
+          grid-template-columns: 40px minmax(0, 1fr);
+        }
+
+        .steps iconify-icon {
+          display: none;
+        }
+
+        .installer {
+          padding-right: 28px;
+        }
+
+        .shield {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="canvas">
+        <div class="left">
+          <div>
+            <div class="badge">
+              <iconify-icon icon="solar:bolt-bold"></iconify-icon>
+              <span>CodexMeter 硬件刷机工具</span>
+            </div>
+
+            <h1>
+              <span class="line">给 ESP32-C3</span>
+              <span class="line">小屏刷入</span>
+              <span class="line">CodexMeter 固件</span>
+            </h1>
+
+            <p class="summary">
+              无需安装 Arduino IDE，使用 Chrome 或 Edge 打开本页，连接 ESP32-C3，点击安装即可写入小屏固件。
+              刷入后设备会提供蓝牙连接、HTTP 推送和 Wi-Fi 配网页。
+            </p>
+          </div>
+
+          <div class="hero-visual" aria-hidden="true">
+            <svg class="device-sketch" viewBox="0 0 520 440" role="img" aria-label="ESP32-C3 小屏手绘图">
+              <defs>
+                <linearGradient id="bodyGrad" x1="145" y1="72" x2="348" y2="304" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#ffffff" />
+                  <stop offset="0.58" stop-color="#eef6ff" />
+                  <stop offset="1" stop-color="#cfe3ff" />
+                </linearGradient>
+                <linearGradient id="sideGrad" x1="300" y1="80" x2="380" y2="286" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#e9f4ff" />
+                  <stop offset="1" stop-color="#9ec7ff" />
+                </linearGradient>
+                <linearGradient id="screenGrad" x1="190" y1="118" x2="290" y2="230" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#245ee8" />
+                  <stop offset="1" stop-color="#0f2b80" />
+                </linearGradient>
+                <linearGradient id="baseGrad" x1="100" y1="266" x2="360" y2="370" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#ffffff" />
+                  <stop offset="0.55" stop-color="#e7f2ff" />
+                  <stop offset="1" stop-color="#9fc6ff" />
+                </linearGradient>
+                <linearGradient id="ledGrad" x1="210" y1="250" x2="290" y2="250" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#1d4ed8" />
+                  <stop offset="1" stop-color="#3bd3ff" />
+                </linearGradient>
+                <filter id="softShadow" x="-30%" y="-30%" width="160%" height="170%">
+                  <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#2563eb" flood-opacity="0.2" />
+                </filter>
+              </defs>
+
+              <path class="wire" d="M54 212 H130 V164 H184" />
+              <path class="wire" d="M84 270 H164 V304 H218" />
+              <path class="wire" d="M92 146 H142 V112 H198" />
+              <path class="wire" d="M360 124 H432 V64" />
+              <path class="wire" d="M374 188 H466 V142" />
+              <path class="wire" d="M364 250 H448 V210" />
+              <path class="wire" d="M300 96 V46 H244" />
+              <path class="wire" d="M210 104 V56" />
+              <circle class="wire-dot" cx="54" cy="212" r="5" />
+              <circle class="wire-dot" cx="84" cy="270" r="5" />
+              <circle class="wire-dot" cx="92" cy="146" r="5" />
+              <circle class="wire-dot" cx="432" cy="64" r="5" />
+              <circle class="wire-dot" cx="466" cy="142" r="5" />
+              <circle class="wire-dot" cx="448" cy="210" r="5" />
+              <circle class="wire-dot" cx="210" cy="56" r="5" />
+
+              <ellipse class="shadow" cx="272" cy="356" rx="150" ry="34" />
+              <g filter="url(#softShadow)">
+                <path class="base-fill" fill="url(#baseGrad)" d="M98 294 L260 220 L424 286 L258 364 Z" />
+                <path class="side" fill="#b7d6ff" d="M98 294 L258 364 L258 394 L98 324 Z" />
+                <path class="side" fill="#82b6ff" d="M258 364 L424 286 L424 314 L258 394 Z" />
+                <path fill="#2b72f6" opacity="0.92" d="M176 304 L260 264 L346 298 L260 340 Z" />
+                <path fill="#7dd3fc" opacity="0.88" d="M204 306 L260 280 L318 302 L260 328 Z" />
+
+                <path class="side" fill="url(#sideGrad)" d="M328 74 C372 90 394 116 394 160 V264 C394 302 364 324 326 306 Z" />
+                <rect class="body" x="142" y="58" width="190" height="258" rx="40" fill="url(#bodyGrad)" transform="rotate(-2 237 187)" />
+                <path fill="#ffffff" opacity="0.72" d="M178 78 C226 62 292 76 318 108" />
+                <rect class="screen" x="176" y="100" width="122" height="138" rx="19" fill="url(#screenGrad)" transform="rotate(-2 237 169)" />
+                <path class="code" d="M216 150 L188 176 L216 202" />
+                <path class="code" d="M260 150 L288 176 L260 202" />
+                <path class="code" d="M252 142 L234 210" />
+                <rect class="led-bar" x="194" y="256" width="94" height="22" rx="11" transform="rotate(-2 241 267)" />
+                <circle class="led" cx="218" cy="266" r="3.5" />
+                <circle class="led" cx="242" cy="265" r="3.5" />
+                <circle class="led" cx="266" cy="264" r="3.5" />
+              </g>
+            </svg>
+          </div>
+
+          <div class="features">
+            <div class="feature">
+              <div class="feature-icon"><iconify-icon icon="solar:bluetooth-bold"></iconify-icon></div>
+              <strong>蓝牙直连</strong>
+              <span>桌面端可直接搜索并连接 CodexMeter 小屏。</span>
+            </div>
+            <div class="feature">
+              <div class="feature-icon"><iconify-icon icon="solar:global-bold"></iconify-icon></div>
+              <strong>网络推送</strong>
+              <span>配网后通过局域网 HTTP 自动同步额度状态。</span>
+            </div>
+            <div class="feature">
+              <div class="feature-icon"><iconify-icon icon="solar:wi-fi-router-bold"></iconify-icon></div>
+              <strong>网页配网</strong>
+              <span>刷机完成后连接 CodexMeter-Setup 热点配置 Wi-Fi。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider" aria-hidden="true"></div>
+
+        <aside class="right">
+          <h2>开始刷机</h2>
+          <p>按顺序操作，刷机过程会清空 ESP32-C3 上原有程序。</p>
+
+          <ol class="steps">
+            <li>
+              <b>1</b>
+              <iconify-icon icon="solar:usb-bold"></iconify-icon>
+              <span>用 USB 数据线连接 ESP32-C3。</span>
+            </li>
+            <li>
+              <b>2</b>
+              <iconify-icon icon="solar:download-minimalistic-bold"></iconify-icon>
+              <span>点击下方安装按钮，选择 ESP32-C3 对应串口。</span>
+            </li>
+            <li>
+              <b>3</b>
+              <iconify-icon icon="solar:check-circle-bold"></iconify-icon>
+              <span>确认安装，等待固件写入完成。</span>
+            </li>
+            <li>
+              <b>4</b>
+              <iconify-icon icon="solar:wi-fi-router-bold"></iconify-icon>
+              <span>连接 <code>CodexMeter-Setup</code> 热点，打开 <a href="http://192.168.4.1">192.168.4.1</a> 配网。</span>
+            </li>
+          </ol>
+
+          <div class="installer">
+            <p class="installer-label">固件版本：<span>v0.1.0</span></p>
+            <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+            <div class="shield" aria-hidden="true">
+              <iconify-icon icon="solar:shield-check-bold-duotone"></iconify-icon>
+            </div>
+          </div>
+
+          <div class="note">
+            <iconify-icon icon="solar:info-circle-bold"></iconify-icon>
+            <span>
+              如果浏览器看不到设备，请按住开发板 BOOT 键后重新插入 USB，或更换支持数据传输的 USB 线。
+              安装按钮和系统串口授权弹窗由浏览器组件提供，个别类型可能显示英文。
+            </span>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

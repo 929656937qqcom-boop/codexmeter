@@ -1,0 +1,74 @@
+{
+  "name": "codexmeter",
+  "version": "0.1.0",
+  "description": "Local Codex quota monitor for Windows with a compact desktop widget.",
+  "author": "929656937qqcom-boop",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "dist-electron/main/index.js",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/929656937qqcom-boop/codexmeter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/929656937qqcom-boop/codexmeter/issues"
+  },
+  "homepage": "https://github.com/929656937qqcom-boop/codexmeter#readme",
+  "keywords": [
+    "codex",
+    "quota",
+    "electron",
+    "vue",
+    "desktop",
+    "usage-monitor"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist-electron/main/index.js && set CODEXMETER_DEV_SERVER_URL=http://127.0.0.1:5173&& electron .\"",
+    "start": "npm run build && electron .",
+    "build": "vue-tsc --noEmit && tsc -p tsconfig.electron.json && node scripts/write-preload-cjs.cjs && vite build",
+    "test": "vitest run",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:portable": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "electron-store": "^10.1.0",
+    "lucide-vue-next": "^0.577.0",
+    "naive-ui": "^2.42.0",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/tsconfig": "^0.7.0",
+    "concurrently": "^9.2.1",
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.20",
+    "vitest": "^2.1.9",
+    "vue-tsc": "^2.2.12",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "com.codexmeter.desktop",
+    "productName": "CodexMeter",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    }
+  }
+}
