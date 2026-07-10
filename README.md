@@ -19,6 +19,24 @@ CodexMeter 是一个本地运行的 Codex 用量监控桌面工具。它基于 E
 - ESP32-C3 小屏硬件显示方案，支持 BLE / HTTP 推送
 - 本地安全存储授权信息，不主动发起模型请求
 
+## 项目截图
+
+### Token 分析
+
+![CodexMeter Token 分析界面](./docs/images/usage-analysis.png)
+
+### 额度总览
+
+<p align="center">
+  <img src="./docs/images/quota-dashboard.png" alt="CodexMeter 额度总览界面" width="520">
+</p>
+
+### 轻量悬浮球
+
+<p align="center">
+  <img src="./docs/images/floating-widget.png" alt="CodexMeter 轻量悬浮球" width="90">
+</p>
+
 ## 本地开发
 
 环境要求：
