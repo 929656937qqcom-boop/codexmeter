@@ -158,4 +158,128 @@ describe('Codex local usage analytics', () => {
     expect(summary.tasks.some((task) => task.title.includes('每日 Codex'))).toBe(true)
     expect(summary.boundaryNote).toContain('本机日志粗估')
   })
+
+  it('falls back to total_token_usage and counts distinct sessions per workspace', () => {
+    const now = new Date('2026-07-08T04:30:00.000Z')
+    const events = [
+      {
+        file: 'session-a.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-08T01:00:00.000Z',
+        payload: { cwd: 'C:\\Work\\CodexMeter' }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'event_msg',
+        timestamp: '2026-07-08T01:05:00.000Z',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 400,
+              cached_input_tokens: 100,
+              output_tokens: 80,
+              reasoning_output_tokens: 10,
+              total_tokens: 480
+            }
+          }
+        }
+      },
+      {
+        file: 'session-b.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-08T02:00:00.000Z',
+        payload: { cwd: 'C:\\Work\\CodexMeter' }
+      },
+      {
+        file: 'session-b.jsonl',
+        type: 'event_msg',
+        timestamp: '2026-07-08T02:05:00.000Z',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: {
+              input_tokens: 200,
+              cached_input_tokens: 50,
+              output_tokens: 20,
+              reasoning_output_tokens: 4,
+              total_tokens: 220
+            }
+          }
+        }
+      }
+    ]
+
+    const summary = analyzeCodexUsageEvents(events, { now })
+
+    expect(summary.periods.today.total.totalTokens).toBe(700)
+    expect(summary.periods.today.total.cachedInputTokens).toBe(150)
+    expect(summary.projects[0]).toMatchObject({
+      name: 'CodexMeter',
+      sessions: 2,
+      totalTokens: 700
+    })
+  })
+
+  it('keeps internal context and short acknowledgements out of the task board', () => {
+    const now = new Date('2026-07-08T04:30:00.000Z')
+    const events = [
+      {
+        file: 'session-a.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-08T01:00:00.000Z',
+        payload: { cwd: 'C:\\Work\\CodexMeter' }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'response_item',
+        timestamp: '2026-07-08T01:01:00.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<recommended_plugins> hidden plugin metadata </recommended_plugins>' }]
+        }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'response_item',
+        timestamp: '2026-07-08T01:02:00.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '好' }]
+        }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'response_item',
+        timestamp: '2026-07-08T01:03:00.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '升级 CodexMeter 的 token 分析页' }]
+        }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'response_item',
+        timestamp: '2026-07-08T01:04:00.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: '# Files mentioned by the user:\n\n## screenshot.png\n\n## My request for Codex:\n主界面可以精简掉下面的模块 <image name=[Image #1] path="C:\\Temp\\screenshot.png"></image>'
+          }]
+        }
+      }
+    ]
+
+    const summary = analyzeCodexUsageEvents(events, { now })
+
+    expect(summary.tasks.map((task) => task.title)).toEqual([
+      '主界面可以精简掉下面的模块',
+      '升级 CodexMeter 的 token 分析页'
+    ])
+  })
 })

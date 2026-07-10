@@ -81,7 +81,7 @@ export interface CodexUsageSummary {
 const dayMs = 24 * 60 * 60 * 1000
 const shanghaiOffsetMs = 8 * 60 * 60 * 1000
 const priceModel = {
-  name: 'Codex gpt-5.3-codex API equivalent estimate',
+  name: 'Codex API equivalent rough estimate',
   inputPerMillionUsd: 1.75,
   cachedInputPerMillionUsd: 0.175,
   outputPerMillionUsd: 14
@@ -118,6 +118,7 @@ export function analyzeCodexUsageEvents(
   }
   const sessions = new Map<string, { cwd: string; lastActive: string }>()
   const projects = new Map<string, UsageProjectSummary>()
+  const projectSessionKeys = new Map<string, Set<string>>()
   const tools = new Map<string, UsageToolSummary>()
   const skills = new Map<string, UsageSkillSummary>()
   const pendingCalls = new Map<string, string>()
@@ -144,9 +145,10 @@ export function analyzeCodexUsageEvents(
     sessions.set(sessionKey, session)
 
     if (event.type === 'event_msg' && payload?.type === 'token_count') {
-      const usage = readTokenUsage(asRecord(asRecord(payload.info)?.last_token_usage))
+      const info = asRecord(payload.info)
+      const usage = readTokenUsage(asRecord(info?.last_token_usage) ?? asRecord(info?.total_token_usage))
       addToPeriods(periods, timestamp, todayStart, sevenDaysStart, monthStart, usage, 'events')
-      addProjectUsage(projects, session.cwd, sessionKey, timestamp, usage)
+      addProjectUsage(projects, projectSessionKeys, session.cwd, sessionKey, timestamp, usage)
       continue
     }
 
@@ -208,7 +210,7 @@ export function analyzeCodexUsageEvents(
       .sort((a, b) => b.totalTokens - a.totalTokens)
       .slice(0, 8),
     tools: [...tools.values()]
-      .sort((a, b) => b.calls - a.calls || b.outputChars - a.outputChars)
+      .sort((a, b) => toolCostScore(b) - toolCostScore(a) || b.calls - a.calls)
       .slice(0, 8),
     skills: [...skills.values()]
       .sort((a, b) => b.hits - a.hits || a.name.localeCompare(b.name))
@@ -263,6 +265,7 @@ function addToPeriodCounters(
 
 function addProjectUsage(
   projects: Map<string, UsageProjectSummary>,
+  projectSessionKeys: Map<string, Set<string>>,
   cwd: string,
   sessionKey: string,
   timestamp: Date,
@@ -276,7 +279,12 @@ function addProjectUsage(
     lastActive: timestamp.toISOString(),
     ...emptyTotals()
   }
-  current.sessions += current.sessions === 0 ? 1 : 0
+  const sessions = projectSessionKeys.get(path) ?? new Set<string>()
+  if (!sessions.has(sessionKey)) {
+    sessions.add(sessionKey)
+    current.sessions += 1
+    projectSessionKeys.set(path, sessions)
+  }
   current.lastActive = timestamp.toISOString()
   addTotals(current, usage)
   projects.set(path, current)
@@ -287,6 +295,10 @@ function incrementTool(tools: Map<string, UsageToolSummary>, name: string, calls
   current.calls += calls
   current.outputChars += outputChars
   tools.set(name, current)
+}
+
+function toolCostScore(tool: UsageToolSummary): number {
+  return tool.outputChars + tool.calls * 500
 }
 
 function countSkills(skills: Map<string, UsageSkillSummary>, text: string): void {
@@ -369,15 +381,41 @@ function extractMessageText(payload: Record<string, unknown>): string {
 }
 
 function isRealUserText(text: string): boolean {
-  return Boolean(text)
-    && !text.startsWith('<heartbeat>')
-    && !text.startsWith('<environment_context>')
-    && !text.startsWith('# AGENTS.md instructions')
+  const cleaned = stripUserContextNoise(text)
+  if (!cleaned) {
+    return false
+  }
+
+  const internalPrefixes = [
+    '<heartbeat>',
+    '<environment_context>',
+    '<recommended_plugins>',
+    '<apps_instructions>',
+    '<plugins_instructions>',
+    '<personality_spec>',
+    '# AGENTS.md instructions'
+  ]
+  const acknowledgements = new Set(['好', '好的', '可以', '嗯', '嗯嗯', '行', 'OK', 'ok'])
+
+  return !internalPrefixes.some((prefix) => cleaned.startsWith(prefix))
+    && !acknowledgements.has(cleaned)
 }
 
 function compactText(text: string): string {
-  const cleaned = text.replace(/\s+/g, ' ').trim()
+  const cleaned = stripUserContextNoise(text)
   return cleaned.length > 72 ? `${cleaned.slice(0, 72)}...` : cleaned
+}
+
+function stripUserContextNoise(text: string): string {
+  const requestMatch = text.match(/#+\s*My request for Codex:\s*([\s\S]*)$/i)
+  const source = requestMatch?.[1] ?? text
+  return source.replace(/\s+/g, ' ').trim()
+    .replace(/<image\b[^>]*>/gi, '')
+    .replace(/<\/image>/gi, '')
+    .replace(/<file\b[^>]*>/gi, '')
+    .replace(/<\/file>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function workspaceName(path: string): string {

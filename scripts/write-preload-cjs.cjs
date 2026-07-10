@@ -29,7 +29,6 @@ contextBridge.exposeInMainWorld('codexMeter', {
   getWidgetState: () => ipcRenderer.invoke('widget:state'),
   setWidgetVisible: (visible, alwaysOnTop) => ipcRenderer.invoke('widget:setVisible', visible, alwaysOnTop),
   setWidgetAlwaysOnTop: (enabled) => ipcRenderer.invoke('widget:setAlwaysOnTop', enabled),
-  setWidgetExpanded: (expanded) => ipcRenderer.invoke('widget:setExpanded', expanded),
   openMainWindow: () => ipcRenderer.invoke('widget:openMainWindow'),
   onQuotaUpdated: (callback) => {
     const listener = (_event, snapshot) => callback(snapshot)

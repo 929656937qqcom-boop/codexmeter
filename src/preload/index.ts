@@ -28,22 +28,16 @@ const api = {
   minimizeMainWindow: () => ipcRenderer.invoke('window:minimizeMain') as Promise<{ minimized: boolean }>,
   closeMainWindow: () => ipcRenderer.invoke('window:closeMain') as Promise<{ visible: boolean }>,
   getWidgetState: () =>
-    ipcRenderer.invoke('widget:state') as Promise<{ visible: boolean; alwaysOnTop: boolean; expanded: boolean }>,
+    ipcRenderer.invoke('widget:state') as Promise<{ visible: boolean; alwaysOnTop: boolean }>,
   setWidgetVisible: (visible: boolean, alwaysOnTop: boolean) =>
     ipcRenderer.invoke('widget:setVisible', visible, alwaysOnTop) as Promise<{
       visible: boolean
       alwaysOnTop: boolean
-      expanded: boolean
     }>,
   setWidgetAlwaysOnTop: (enabled: boolean) =>
     ipcRenderer.invoke('widget:setAlwaysOnTop', enabled) as Promise<{
       visible: boolean
       alwaysOnTop: boolean
-      expanded: boolean
-    }>,
-  setWidgetExpanded: (expanded: boolean) =>
-    ipcRenderer.invoke('widget:setExpanded', expanded) as Promise<{
-      expanded: boolean
     }>,
   openMainWindow: () => ipcRenderer.invoke('widget:openMainWindow') as Promise<{ visible: boolean }>,
   onQuotaUpdated: (callback: (snapshot: QuotaSnapshot) => void) => {

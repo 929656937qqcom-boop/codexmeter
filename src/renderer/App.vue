@@ -25,6 +25,8 @@ import type { CodexUsageSummary, UsagePeriodSummary, UsageTokenTotals } from '..
 const BLE_SERVICE_UUID = '6f4d0001-9c8f-4c2a-9f12-000000000001'
 const BLE_USAGE_UUID = '6f4d0002-9c8f-4c2a-9f12-000000000002'
 
+type UsagePeriodKey = 'today' | 'sevenDays' | 'month'
+
 const isWidgetView = new URLSearchParams(window.location.search).get('view') === 'widget'
 const snapshot = ref<QuotaSnapshot | null>(null)
 const settings = ref<AppSettings | null>(null)
@@ -32,9 +34,9 @@ const loading = ref(false)
 const usageLoading = ref(false)
 const status = ref('就绪')
 const activeDashboardView = ref<'quota' | 'usage'>('quota')
+const activeUsagePeriod = ref<UsagePeriodKey>('today')
 const usageSummary = ref<CodexUsageSummary | null>(null)
 const widgetVisible = ref(false)
-const widgetExpanded = ref(false)
 const alwaysOnTop = ref(false)
 const hardwareEndpointInput = ref('')
 const hardwareSaving = ref(false)
@@ -55,10 +57,6 @@ const aboutVisible = ref(false)
 let unsubscribeQuota: (() => void) | undefined
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
-let widgetHoverOpenTimer: number | undefined
-let widgetHoverCloseTimer: number | undefined
-let widgetOrbClickTimer: number | undefined
-let widgetExpansionRequestId = 0
 let removeCopyListener: (() => void) | undefined
 let unsubscribeHardwarePush: (() => void) | undefined
 
@@ -198,25 +196,27 @@ const hardwareConnectionSummary = computed(() => {
   }
   return '未连接'
 })
-const usagePeriods = computed(() => {
+const usagePeriods = computed<Array<{ key: UsagePeriodKey; label: string; hint: string; period: UsagePeriodSummary }>>(() => {
   const summary = usageSummary.value
   if (!summary) {
     return []
   }
 
   return [
-    { key: 'today', label: '今日', period: summary.periods.today },
-    { key: 'sevenDays', label: '7 日', period: summary.periods.sevenDays },
-    { key: 'month', label: '本月', period: summary.periods.month }
+    { key: 'today', label: '今日', hint: 'Today', period: summary.periods.today },
+    { key: 'sevenDays', label: '7 日', hint: '7 Days', period: summary.periods.sevenDays },
+    { key: 'month', label: '本月', hint: 'Month', period: summary.periods.month }
   ]
 })
-const currentUsagePeriod = computed(() => usageSummary.value?.periods.month ?? emptyUsagePeriod())
+const currentUsagePeriod = computed(() => usageSummary.value?.periods[activeUsagePeriod.value] ?? emptyUsagePeriod())
+const currentUsagePeriodLabel = computed(() => usagePeriods.value.find((item) => item.key === activeUsagePeriod.value)?.label ?? '今日')
+const todayUsagePeriod = computed(() => usageSummary.value?.periods.today ?? emptyUsagePeriod())
 const usageSplitItems = computed(() => {
   const total = currentUsagePeriod.value.total
   return [
-    { label: 'Input', value: total.inputTokens, tone: 'input' },
-    { label: 'Cached', value: total.cachedInputTokens, tone: 'cached' },
-    { label: 'Output', value: total.outputTokens, tone: 'output' }
+    { label: '输入', value: total.inputTokens, tone: 'input' },
+    { label: '缓存', value: total.cachedInputTokens, tone: 'cached' },
+    { label: '输出', value: total.outputTokens, tone: 'output' }
   ]
 })
 const topUsageTools = computed(() => usageSummary.value?.tools.slice(0, 2) ?? [])
@@ -243,8 +243,6 @@ onMounted(async () => {
 
   if (isWidgetView) {
     snapshot.value = window.codexMeter ? await window.codexMeter.getLatestQuota() : sampleQuotaSnapshot()
-    widgetExpanded.value = false
-    void window.codexMeter?.setWidgetExpanded(false)
     return
   }
 
@@ -259,7 +257,6 @@ onMounted(async () => {
     const widgetState = await window.codexMeter.getWidgetState()
     widgetVisible.value = widgetState.visible
     alwaysOnTop.value = widgetState.visible ? widgetState.alwaysOnTop : false
-    widgetExpanded.value = widgetState.expanded
   } else {
     settings.value = { refreshIntervalMinutes: 5, hardwareDisplayEnabled: true }
     hardwareAutoSync.value = true
@@ -276,8 +273,6 @@ onUnmounted(() => {
   removeCopyListener?.()
   clearAutoRefresh()
   clearNotice()
-  clearWidgetHoverTimers()
-  clearWidgetOrbClickTimer()
 })
 
 async function refreshQuota(): Promise<void> {
@@ -580,7 +575,6 @@ async function updateWidgetVisible(value: boolean): Promise<void> {
   const state = await window.codexMeter.setWidgetVisible(value, value ? alwaysOnTop.value : false)
   widgetVisible.value = state.visible
   alwaysOnTop.value = state.alwaysOnTop
-  widgetExpanded.value = state.expanded
 }
 
 async function updateAlwaysOnTop(value: boolean): Promise<void> {
@@ -597,7 +591,6 @@ async function updateAlwaysOnTop(value: boolean): Promise<void> {
   const state = await window.codexMeter.setWidgetAlwaysOnTop(value)
   widgetVisible.value = state.visible
   alwaysOnTop.value = state.alwaysOnTop
-  widgetExpanded.value = state.expanded
 }
 
 async function minimizeMainWindow(): Promise<void> {
@@ -608,99 +601,8 @@ async function closeMainWindow(): Promise<void> {
   await window.codexMeter?.closeMainWindow()
 }
 
-async function setWidgetExpanded(value: boolean): Promise<void> {
-  const requestId = ++widgetExpansionRequestId
-  if (!window.codexMeter) {
-    widgetExpanded.value = value
-    return
-  }
-
-  if (!value) {
-    widgetExpanded.value = false
-  }
-
-  try {
-    const state = await window.codexMeter.setWidgetExpanded(value)
-    if (requestId === widgetExpansionRequestId) {
-      widgetExpanded.value = state.expanded
-    }
-  } catch (error) {
-    if (requestId === widgetExpansionRequestId) {
-      widgetExpanded.value = false
-    }
-    console.error('Failed to resize CodexMeter widget:', error)
-  }
-}
-
-function toggleWidgetExpanded(): void {
-  void setWidgetExpanded(!widgetExpanded.value)
-}
-
-function clearWidgetHoverTimers(): void {
-  if (widgetHoverOpenTimer) {
-    clearTimeout(widgetHoverOpenTimer)
-    widgetHoverOpenTimer = undefined
-  }
-  if (widgetHoverCloseTimer) {
-    clearTimeout(widgetHoverCloseTimer)
-    widgetHoverCloseTimer = undefined
-  }
-}
-
-function clearWidgetOrbClickTimer(): void {
-  if (widgetOrbClickTimer) {
-    clearTimeout(widgetOrbClickTimer)
-    widgetOrbClickTimer = undefined
-  }
-}
-
-function scheduleWidgetHoverDetails(): void {
-  clearWidgetHoverTimers()
-  widgetHoverOpenTimer = window.setTimeout(() => {
-    widgetHoverOpenTimer = undefined
-    showWidgetDetails()
-  }, 180)
-}
-
-function scheduleWidgetDetailsClose(): void {
-  if (widgetHoverOpenTimer) {
-    clearTimeout(widgetHoverOpenTimer)
-    widgetHoverOpenTimer = undefined
-  }
-  if (widgetHoverCloseTimer) {
-    clearTimeout(widgetHoverCloseTimer)
-  }
-  widgetHoverCloseTimer = window.setTimeout(() => {
-    widgetHoverCloseTimer = undefined
-    clearWidgetOrbClickTimer()
-    void setWidgetExpanded(false)
-  }, 650)
-}
-
-function handleWidgetOrbClick(): void {
-  clearWidgetHoverTimers()
-  if (widgetOrbClickTimer) {
-    clearWidgetOrbClickTimer()
-    void openMainFromWidget()
-    return
-  }
-
-  widgetOrbClickTimer = window.setTimeout(() => {
-    widgetOrbClickTimer = undefined
-    showWidgetDetails()
-  }, 220)
-}
-
-function showWidgetDetails(): void {
-  void setWidgetExpanded(true)
-}
-
 async function openMainFromWidget(): Promise<void> {
-  clearWidgetHoverTimers()
-  clearWidgetOrbClickTimer()
-  widgetExpanded.value = false
   try {
-    await setWidgetExpanded(false)
     await window.codexMeter?.openMainWindow()
   } catch (error) {
     console.error('Failed to open CodexMeter main window from widget:', error)
@@ -795,32 +697,22 @@ const widgetOrbStyle = computed(() => ({
   '--widget-five-ring': `${widgetFiveRing.value}%`,
   '--widget-orb-fill': `${widgetFiveRing.value}%`
 }))
-const widgetPeekDialStyle = computed(() => ({
-  '--widget-five-ring': `${remainingPercent(fiveHourWindow.value)}%`,
-  '--widget-week-ring': `${remainingPercent(sevenDayWindow.value)}%`
-}))
-const widgetPeekFiveStyle = computed(() => ({
-  '--widget-peek-ring': `${remainingPercent(fiveHourWindow.value)}%`
-}))
-const widgetPeekWeeklyStyle = computed(() => ({
-  '--widget-peek-ring': `${remainingPercent(sevenDayWindow.value)}%`
-}))
 const widgetOrbTone = computed(() => `is-${fiveHourState.value}`)
 const widgetFiveUpdate = computed(() => widgetClockText(snapshot.value?.refreshedAt))
-const widgetPeekFiveUpdate = computed(() => {
-  const resetAt = widgetWindowResetClock(fiveHourWindow.value)
-  return resetAt === '--' ? `更新 ${widgetFiveUpdate.value}` : `重置 ${resetAt} · 更新 ${widgetFiveUpdate.value}`
-})
-const widgetPeekWeeklyUpdate = computed(() => {
-  const resetAt = widgetWindowResetDate(sevenDayWindow.value)
-  return resetAt === '--' ? `更新 ${widgetFiveUpdate.value}` : `重置 ${resetAt} · 更新 ${widgetFiveUpdate.value}`
-})
-const widgetResetCardPeek = computed(() => {
-  if (!resetCards.value.length) {
-    return '重置卡 0'
-  }
+const widgetTooltip = computed(() => {
+  const fiveHour = fiveHourWindow.value ? `${remainingPercent(fiveHourWindow.value)}%` : '--'
+  const weekly = sevenDayWindow.value ? `${remainingPercent(sevenDayWindow.value)}%` : '--'
+  const cards = resetCards.value.length
+    ? resetCards.value.map((card, index) => `重置卡 ${index + 1}: ${widgetResetCardShortDate(card)}`)
+    : ['重置卡: 0']
 
-  return `重置卡 ${resetCards.value.length} · ${widgetResetCardShortDate(resetCards.value[0])}`
+  return [
+    `5 小时剩余: ${fiveHour}`,
+    `一周剩余: ${weekly}`,
+    `更新: ${widgetFiveUpdate.value}`,
+    ...cards,
+    '双击打开主界面'
+  ].join('\n')
 })
 
 function widgetClockText(value: string | undefined): string {
@@ -834,23 +726,6 @@ function widgetClockText(value: string | undefined): string {
   }
 
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function widgetWindowResetClock(window: QuotaWindow | null): string {
-  return widgetClockText(window?.resetAt)
-}
-
-function widgetWindowResetDate(window: QuotaWindow | null): string {
-  if (!window?.resetAt) {
-    return '--'
-  }
-
-  const date = new Date(window.resetAt)
-  if (Number.isNaN(date.getTime())) {
-    return '--'
-  }
-
-  return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`
 }
 
 function widgetResetCardShortDate(card: ResetCard): string {
@@ -950,13 +825,23 @@ function emptyTokenTotals(): UsageTokenTotals {
 }
 
 function formatTokenCount(value: number): string {
+  if (value >= 100_000_000) {
+    return `${formatChineseQuantity(value / 100_000_000, 2)}亿`
+  }
   if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`
+    return `${formatChineseQuantity(value / 1_000_000, 1)}百万`
   }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`
+  if (value >= 10_000) {
+    return `${formatChineseQuantity(value / 10_000, 1)}万`
   }
-  return String(Math.round(value))
+  return Math.round(value).toLocaleString('zh-CN')
+}
+
+function formatChineseQuantity(value: number, maximumFractionDigits: number): string {
+  return value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits
+  })
 }
 
 function formatUsd(value: number): string {
@@ -967,6 +852,25 @@ function formatUsd(value: number): string {
     return `$${value.toFixed(2)}`
   }
   return `$${value.toFixed(4)}`
+}
+
+function formatToolCost(outputChars: number): string {
+  if (outputChars >= 100_000_000) {
+    return `${formatChineseQuantity(outputChars / 100_000_000, 2)}亿字`
+  }
+  if (outputChars >= 10_000) {
+    return `${formatChineseQuantity(outputChars / 10_000, 1)}万字`
+  }
+  return `${Math.round(outputChars).toLocaleString('zh-CN')}字`
+}
+
+function compactDay(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return '--'
+  }
+
+  return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`
 }
 
 function usageSplitStyle(value: number): Record<string, string> {
@@ -1092,18 +996,15 @@ function compactDateTime(value: string): string {
       </div>
     </Transition>
 
-    <main v-if="isWidgetView" class="widget-shell" :class="widgetExpanded ? 'is-expanded' : 'is-collapsed'">
+    <main v-if="isWidgetView" class="widget-shell is-collapsed">
       <button
-        v-if="!widgetExpanded"
         class="widget-orb"
         :class="widgetOrbTone"
         :style="widgetOrbStyle"
+        :title="widgetTooltip"
         type="button"
-        aria-label="查看 CodexMeter 用量详情"
-        @mouseenter="scheduleWidgetHoverDetails"
-        @mouseleave="scheduleWidgetDetailsClose"
-        @focus="scheduleWidgetHoverDetails"
-        @click="handleWidgetOrbClick"
+        aria-label="CodexMeter 用量悬浮球，双击打开主界面"
+        @dblclick="openMainFromWidget"
       >
         <span class="widget-orb-meter" aria-hidden="true">
           <span class="widget-orb-gauge" />
@@ -1113,55 +1014,6 @@ function compactDateTime(value: string): string {
           <span class="widget-orb-label">5H</span>
         </span>
       </button>
-
-      <section v-else class="widget-peek" @mouseenter="clearWidgetHoverTimers" @mouseleave="scheduleWidgetDetailsClose">
-        <div class="widget-peek-card">
-          <div class="widget-peek-visual">
-            <div class="widget-peek-dual-ring" :style="widgetPeekDialStyle">
-              <span class="widget-peek-ring is-weekly" :style="widgetPeekWeeklyStyle" aria-hidden="true">
-                <span />
-              </span>
-              <span class="widget-peek-ring is-five-hour" :style="widgetPeekFiveStyle" aria-hidden="true">
-                <span />
-              </span>
-              <div class="widget-peek-center">
-                <span>
-                  <small>5h</small>
-                  <strong>{{ fiveHourWindow ? `${remainingPercent(fiveHourWindow)}%` : '--' }}</strong>
-                </span>
-                <span>
-                  <small>7d</small>
-                  <strong>{{ sevenDayWindow ? `${remainingPercent(sevenDayWindow)}%` : '--' }}</strong>
-                </span>
-                <em>剩余</em>
-              </div>
-            </div>
-          </div>
-
-          <div class="widget-peek-legend">
-            <div class="widget-peek-row" :class="['five-hour', fiveHourState]">
-              <span class="widget-peek-dot" aria-hidden="true" />
-              <span class="widget-peek-copy">
-                <strong>5h 重置</strong>
-              </span>
-              <b class="widget-peek-value">{{ widgetWindowResetClock(fiveHourWindow) }}</b>
-            </div>
-
-            <div class="widget-peek-row" :class="['weekly', sevenDayState]">
-              <span class="widget-peek-dot" aria-hidden="true" />
-              <span class="widget-peek-copy">
-                <strong>7d 重置</strong>
-              </span>
-              <b class="widget-peek-value">{{ widgetWindowResetDate(sevenDayWindow) }} {{ widgetWindowResetClock(sevenDayWindow) }}</b>
-            </div>
-          </div>
-
-          <div class="widget-peek-reset">
-            <span>{{ widgetResetCardPeek }}</span>
-            <button class="widget-peek-open" type="button" @click.stop="openMainFromWidget">打开</button>
-          </div>
-        </div>
-      </section>
     </main>
 
     <main v-else class="desktop-shell">
@@ -1190,11 +1042,11 @@ function compactDateTime(value: string): string {
               :disabled="loading || usageLoading"
               @click="refreshDashboardData"
             >
-              <RefreshCw :size="15" :stroke-width="2.2" />
+              <RefreshCw :size="18" :stroke-width="2.2" />
             </button>
             <div class="window-control-strip" aria-label="窗口控制">
               <button class="window-control-button" type="button" aria-label="缩小" title="缩小" @click="minimizeMainWindow">
-                <Minus :size="13" :stroke-width="2.4" />
+                <Minus :size="15" :stroke-width="2.4" />
               </button>
               <button
                 class="window-control-button is-close"
@@ -1203,7 +1055,7 @@ function compactDateTime(value: string): string {
                 title="关闭"
                 @click="closeMainWindow"
               >
-                <X :size="13" :stroke-width="2.4" />
+                <X :size="15" :stroke-width="2.4" />
               </button>
             </div>
           </div>
@@ -1235,7 +1087,7 @@ function compactDateTime(value: string): string {
             :aria-pressed="widgetVisible"
             @click="updateWidgetVisible(!widgetVisible)"
           >
-            <Monitor :size="12" :stroke-width="2" />
+            <Monitor :size="16" :stroke-width="2" />
             <span>小组件</span>
             <strong>{{ widgetVisible ? '已开' : '关闭' }}</strong>
           </button>
@@ -1247,7 +1099,7 @@ function compactDateTime(value: string): string {
             :aria-pressed="alwaysOnTop"
             @click="updateAlwaysOnTop(!alwaysOnTop)"
           >
-            <Pin :size="12" :stroke-width="2" />
+            <Pin :size="16" :stroke-width="2" />
             <span>固化</span>
             <strong>{{ alwaysOnTop ? '开启' : '关闭' }}</strong>
           </button>
@@ -1258,7 +1110,7 @@ function compactDateTime(value: string): string {
             :title="oauthConnected ? oauthEmail ?? 'OAuth 已连接' : '连接 Codex OAuth'"
             @click="connecting ? cancelOAuth() : oauthConnected ? disconnectOAuth() : connectOAuth()"
           >
-            <Link2 :size="12" :stroke-width="2" />
+            <Link2 :size="16" :stroke-width="2" />
             <span>连接</span>
             <strong>{{ connecting ? '连接中' : systemStateLabel }}</strong>
           </button>
@@ -1269,7 +1121,7 @@ function compactDateTime(value: string): string {
           <article class="quota-dial-card five-hour" :class="fiveHourState">
             <div class="quota-dial-head">
               <span>
-                <Clock :size="12" :stroke-width="2" />
+                <Clock :size="16" :stroke-width="2" />
                 5 小时额度
               </span>
               <b>{{ quotaBadge(fiveHourWindow) }}</b>
@@ -1291,7 +1143,7 @@ function compactDateTime(value: string): string {
           <article class="quota-dial-card weekly" :class="sevenDayState">
             <div class="quota-dial-head">
               <span>
-                <Calendar :size="12" :stroke-width="2" />
+                <Calendar :size="16" :stroke-width="2" />
                 一周额度
               </span>
               <b>{{ quotaBadge(sevenDayWindow) }}</b>
@@ -1314,7 +1166,7 @@ function compactDateTime(value: string): string {
         <section class="reset-card-list" aria-label="重置卡">
           <div class="reset-card-list-head">
             <span class="reset-card-list-title">
-              <Ticket :size="13" :stroke-width="2" />
+              <Ticket :size="16" :stroke-width="2" />
               <strong>重置卡 · {{ resetCards.length }} 张</strong>
             </span>
             <small>可提前重置额度窗口</small>
@@ -1335,14 +1187,23 @@ function compactDateTime(value: string): string {
 
         <section v-else class="usage-analytics-panel" aria-label="本机 token 分析">
           <div class="usage-period-grid">
-            <article v-for="item in usagePeriods" :key="item.key" class="usage-period-card">
+            <button
+              v-for="item in usagePeriods"
+              :key="item.key"
+              class="usage-period-card"
+              :class="{ active: activeUsagePeriod === item.key }"
+              type="button"
+              :title="`${item.label}：输入 ${formatTokenCount(item.period.total.inputTokens)}，缓存 ${formatTokenCount(item.period.total.cachedInputTokens)}，输出 ${formatTokenCount(item.period.total.outputTokens)}`"
+              @click="activeUsagePeriod = item.key"
+            >
               <span>{{ item.label }}</span>
               <strong>{{ formatTokenCount(item.period.total.totalTokens) }}</strong>
               <em>{{ formatUsd(item.period.apiEstimateUsd) }}</em>
-            </article>
+              <small>{{ item.period.events }} 次</small>
+            </button>
           </div>
 
-          <div class="usage-split-strip">
+          <div class="usage-split-strip" :title="`${currentUsagePeriodLabel} token 拆分`">
             <div v-for="item in usageSplitItems" :key="item.label" class="usage-split-item" :class="item.tone">
               <span>{{ item.label }}</span>
               <strong>{{ formatTokenCount(item.value) }}</strong>
@@ -1355,7 +1216,9 @@ function compactDateTime(value: string): string {
               <h3>项目排行</h3>
               <div v-for="project in topUsageProjects" :key="project.path" class="usage-rank-row">
                 <span :title="project.path">{{ project.name }}</span>
-                <strong>{{ formatTokenCount(project.totalTokens) }}</strong>
+                <strong :title="`最近活跃 ${compactDateTime(project.lastActive)}`">
+                  {{ formatTokenCount(project.totalTokens) }} · {{ compactDay(project.lastActive) }}
+                </strong>
               </div>
               <div v-if="!topUsageProjects.length" class="usage-rank-row is-empty">
                 <span>暂无项目数据</span>
@@ -1367,11 +1230,13 @@ function compactDateTime(value: string): string {
               <h3>工具 / Skill</h3>
               <div v-for="tool in topUsageTools" :key="tool.name" class="usage-rank-row">
                 <span>{{ tool.name }}</span>
-                <strong>{{ tool.calls }}</strong>
+                <strong :title="`工具输出约 ${formatToolCost(tool.outputChars)}`">
+                  {{ tool.calls }}次 · {{ formatToolCost(tool.outputChars) }}
+                </strong>
               </div>
               <div v-for="skill in topUsageSkills" :key="skill.name" class="usage-rank-row skill">
                 <span>{{ skill.name }}</span>
-                <strong>{{ skill.hits }}</strong>
+                <strong>{{ skill.hits }}次</strong>
               </div>
               <div v-if="!topUsageTools.length && !topUsageSkills.length" class="usage-rank-row is-empty">
                 <span>暂无工具数据</span>
@@ -1383,7 +1248,7 @@ function compactDateTime(value: string): string {
           <section class="usage-task-board">
             <div class="usage-task-head">
               <strong>今日任务</strong>
-              <span>{{ currentUsagePeriod.events }} token_count · {{ currentUsagePeriod.toolCalls }} tools</span>
+              <span>{{ todayUsagePeriod.events }} token_count · {{ todayUsagePeriod.toolCalls }} tools</span>
             </div>
             <div v-for="task in todayUsageTasks" :key="`${task.kind}-${task.source}-${task.updatedAt}`" class="usage-task-row">
               <span>{{ task.title }}</span>

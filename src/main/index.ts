@@ -17,7 +17,6 @@ const appIconPath = devServerUrl
   ? path.join(__dirname, '../../public/icon.png')
   : path.join(__dirname, '../../dist/icon.png')
 const WIDGET_COLLAPSED_SIZE = { width: 68, height: 68 }
-const WIDGET_EXPANDED_SIZE = { width: 136, height: 178 }
 const WIDGET_MARGIN = 24
 
 let mainWindow: BrowserWindow | null = null
@@ -26,7 +25,6 @@ let tray: Tray | null = null
 let isQuitting = false
 let latestSnapshot: QuotaSnapshot | null = null
 let widgetAlwaysOnTop = false
-let widgetExpanded = false
 let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
 
@@ -47,8 +45,8 @@ function configureBluetoothPermissions(): void {
 
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
-    width: 420,
-    height: 352,
+    width: 690,
+    height: 620,
     useContentSize: true,
     frame: false,
     transparent: true,
@@ -112,7 +110,6 @@ async function createWidgetWindow(): Promise<BrowserWindow> {
     return widgetWindow
   }
 
-  widgetExpanded = false
   const collapsedBounds = widgetBoundsFor(WIDGET_COLLAPSED_SIZE)
   widgetWindow = new BrowserWindow({
     width: WIDGET_COLLAPSED_SIZE.width,
@@ -162,14 +159,6 @@ function widgetBoundsFor(size: { width: number; height: number }): Electron.Rect
     x: workArea.x + workArea.width - size.width - WIDGET_MARGIN,
     y: workArea.y + workArea.height - size.height - WIDGET_MARGIN
   }
-}
-
-function resizeWidgetWindow(expanded: boolean): void {
-  if (!widgetWindow || widgetWindow.isDestroyed()) {
-    return
-  }
-
-  widgetWindow.setBounds(widgetBoundsFor(expanded ? WIDGET_EXPANDED_SIZE : WIDGET_COLLAPSED_SIZE), false)
 }
 
 async function showMainWindow(): Promise<{ visible: boolean }> {
@@ -336,8 +325,7 @@ ipcMain.handle('window:closeMain', () => {
 
 ipcMain.handle('widget:state', () => ({
   visible: Boolean(widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()),
-  alwaysOnTop: widgetAlwaysOnTop,
-  expanded: widgetExpanded
+  alwaysOnTop: widgetAlwaysOnTop
 }))
 
 ipcMain.handle('widget:setVisible', async (_event, visible: boolean, alwaysOnTop?: boolean) => {
@@ -345,8 +333,6 @@ ipcMain.handle('widget:setVisible', async (_event, visible: boolean, alwaysOnTop
 
   if (visible) {
     const window = await createWidgetWindow()
-    widgetExpanded = false
-    resizeWidgetWindow(widgetExpanded)
     window.setAlwaysOnTop(widgetAlwaysOnTop)
     window.show()
   } else if (widgetWindow && !widgetWindow.isDestroyed()) {
@@ -355,8 +341,7 @@ ipcMain.handle('widget:setVisible', async (_event, visible: boolean, alwaysOnTop
 
   return {
     visible: Boolean(widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()),
-    alwaysOnTop: widgetAlwaysOnTop,
-    expanded: widgetExpanded
+    alwaysOnTop: widgetAlwaysOnTop
   }
 })
 
@@ -368,17 +353,7 @@ ipcMain.handle('widget:setAlwaysOnTop', (_event, enabled: boolean) => {
 
   return {
     visible: Boolean(widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()),
-    alwaysOnTop: widgetAlwaysOnTop,
-    expanded: widgetExpanded
-  }
-})
-
-ipcMain.handle('widget:setExpanded', (_event, expanded: boolean) => {
-  widgetExpanded = Boolean(expanded)
-  resizeWidgetWindow(widgetExpanded)
-
-  return {
-    expanded: widgetExpanded
+    alwaysOnTop: widgetAlwaysOnTop
   }
 })
 
