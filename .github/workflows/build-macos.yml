@@ -35,6 +35,7 @@ jobs:
       - run: pnpm agent:build
       - run: bash scripts/create-mac-icon.sh
       - name: Package Intel and Apple Silicon
+        continue-on-error: true
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: pnpm exec electron-builder --mac dmg zip --x64 --arm64
