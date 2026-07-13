@@ -1,13 +1,13 @@
 import { getStore } from '@netlify/blobs'
 import type { Config } from '@netlify/functions'
 import { authenticate } from './_shared/auth.js'
-import { aggregateDevices, parseDeviceUsage, type StoredDeviceUsage } from './_shared/schema.js'
+import { aggregateDevices, normalizeDeviceName, parseDeviceUsage, type StoredDeviceUsage } from './_shared/schema.js'
 
 const headers = {
   'content-type': 'application/json; charset=utf-8',
   'access-control-allow-origin': '*',
   'access-control-allow-headers': 'authorization, content-type',
-  'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+  'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'cache-control': 'no-store'
 }
 
@@ -18,6 +18,7 @@ export default async function usage(req: Request): Promise<Response> {
   if (!auth) return json({ error: '同步凭据无效' }, 401)
   const namespace = auth.namespace
   const prefix = `${namespace}/devices/`
+  const aliasPrefix = `${namespace}/device-aliases/`
   if (req.method === 'POST') {
     const contentLength = Number(req.headers.get('content-length') ?? 0)
     if (contentLength > 2_000_000) return json({ error: '请求数据过大' }, 413)
@@ -38,17 +39,47 @@ export default async function usage(req: Request): Promise<Response> {
     return json({ ok: true, deviceId: item.device.id, receivedAt: item.receivedAt })
   }
 
+  if (req.method === 'PATCH') {
+    const body = await req.json().catch(() => null) as { deviceId?: unknown; name?: unknown } | null
+    const deviceId = typeof body?.deviceId === 'string' ? body.deviceId : ''
+    const name = normalizeDeviceName(body?.name)
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(deviceId)) return json({ error: '设备 ID 无效' }, 422)
+    if (!name) return json({ error: '设备名称需为 1-32 个字符' }, 422)
+    const device = await store.get(`${prefix}${deviceId}.json`, { type: 'json' })
+    if (!device) return json({ error: '设备不存在' }, 404)
+    await store.setJSON(`${aliasPrefix}${deviceId}.json`, { name, updatedAt: new Date().toISOString() })
+    return json({ ok: true, deviceId, name })
+  }
+
   if (req.method === 'GET') {
-    const { blobs } = await store.list({ prefix })
-    const devices = (await Promise.all(blobs.map((blob) => store.get(blob.key, { type: 'json' }))))
+    const [{ blobs }, { blobs: aliasBlobs }] = await Promise.all([
+      store.list({ prefix }),
+      store.list({ prefix: aliasPrefix })
+    ])
+    const [storedDevices, storedAliases] = await Promise.all([
+      Promise.all(blobs.map((blob) => store.get(blob.key, { type: 'json' }))),
+      Promise.all(aliasBlobs.map(async (blob) => ({
+        deviceId: blob.key.slice(aliasPrefix.length).replace(/\.json$/, ''),
+        value: await store.get(blob.key, { type: 'json' }) as { name?: unknown } | null
+      })))
+    ])
+    const aliases = new Map(storedAliases.map((item) => [item.deviceId, normalizeDeviceName(item.value?.name)]))
+    const devices = storedDevices
       .filter((item): item is StoredDeviceUsage => Boolean(item))
+      .map((item) => {
+        const name = aliases.get(item.device.id)
+        return name ? { ...item, device: { ...item.device, name } } : item
+      })
     return json(aggregateDevices(devices))
   }
 
   if (req.method === 'DELETE') {
     const deviceId = new URL(req.url).searchParams.get('deviceId') ?? ''
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(deviceId)) return json({ error: '设备 ID 无效' }, 422)
-    await store.delete(`${prefix}${deviceId}.json`)
+    await Promise.all([
+      store.delete(`${prefix}${deviceId}.json`),
+      store.delete(`${aliasPrefix}${deviceId}.json`)
+    ])
     return json({ ok: true })
   }
 

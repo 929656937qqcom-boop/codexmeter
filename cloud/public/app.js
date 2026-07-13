@@ -286,12 +286,47 @@ function renderDevices(devices) {
     const card = document.createElement('article')
     card.className = 'device-card'
     const online = Date.now() - Date.parse(item.receivedAt) < 30 * 60_000
-    card.innerHTML = `<div class="device-head"><strong></strong><div class="device-actions"><span>${online ? '在线' : '已同步'}</span><button type="button">移除</button></div></div><div class="device-meta"></div><div class="device-metrics"><div><span>今日贡献</span><strong>${formatTokens(item.contribution?.todayTokens || 0)}</strong></div><div><span>7 日贡献</span><strong>${formatTokens(item.contribution?.sevenDaysTokens || 0)}</strong></div></div><div class="device-quality">空间贡献 ${trim(number(item.contribution?.sharePercent))}% · 本地完整度 ${number(item.dataQuality?.score)}%</div>`
+    card.innerHTML = `<div class="device-head"><strong></strong><div class="device-actions"><span>${online ? '在线' : '已同步'}</span><button class="rename-device" type="button">改名</button><button class="remove-device" type="button">移除</button></div></div><form class="device-name-editor" hidden><input type="text" maxlength="32" aria-label="设备名称"><button class="save-device-name" type="submit">保存</button><button class="cancel-device-name" type="button">取消</button></form><div class="device-meta"></div><div class="device-metrics"><div><span>今日贡献</span><strong>${formatTokens(item.contribution?.todayTokens || 0)}</strong></div><div><span>7 日贡献</span><strong>${formatTokens(item.contribution?.sevenDaysTokens || 0)}</strong></div></div><div class="device-quality">空间贡献 ${trim(number(item.contribution?.sharePercent))}% · 本地完整度 ${number(item.dataQuality?.score)}%</div>`
     card.querySelector('.device-head > strong').textContent = item.device?.name || '未命名设备'
     card.querySelector('.device-meta').textContent = `${platformLabel(item.device?.platform)} ${item.device?.arch || ''} · v${item.device?.appVersion || '--'} · ${formatTime(item.receivedAt)}`
-    card.querySelector('button').addEventListener('click', () => removeDevice(item.device.id, item.device.name))
+    const editor = card.querySelector('.device-name-editor')
+    const input = editor.querySelector('input')
+    card.querySelector('.rename-device').addEventListener('click', () => {
+      input.value = item.device?.name || ''
+      editor.hidden = false
+      input.focus()
+      input.select()
+    })
+    card.querySelector('.cancel-device-name').addEventListener('click', () => { editor.hidden = true })
+    editor.addEventListener('submit', (event) => {
+      event.preventDefault()
+      renameDevice(item.device.id, input.value, editor)
+    })
+    card.querySelector('.remove-device').addEventListener('click', () => removeDevice(item.device.id, item.device.name))
     return card
   }) : [emptyRow('尚未同步任何设备')]))
+}
+
+async function renameDevice(deviceId, name, editor) {
+  const normalized = String(name || '').trim()
+  if (!normalized || Array.from(normalized).length > 32) return alert('设备名称需为 1-32 个字符')
+  const controls = editor.querySelectorAll('input, button')
+  controls.forEach((control) => { control.disabled = true })
+  try {
+    const response = await fetch('/api/usage', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${state.key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId, name: normalized })
+    })
+    const result = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(result.error || '设备改名失败')
+    editor.hidden = true
+    await loadDashboard(false, true)
+  } catch (error) {
+    alert(error instanceof Error ? error.message : '设备改名失败')
+  } finally {
+    controls.forEach((control) => { control.disabled = false })
+  }
 }
 
 async function removeDevice(deviceId, name) {

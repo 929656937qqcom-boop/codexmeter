@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateDevices, parseDeviceUsage } from '../cloud/netlify/functions/_shared/schema'
+import { aggregateDevices, normalizeDeviceName, parseDeviceUsage } from '../cloud/netlify/functions/_shared/schema'
 
 function envelope(deviceId: string, name: string, totalTokens: number) {
   const total = {
@@ -21,6 +21,13 @@ function envelope(deviceId: string, name: string, totalTokens: number) {
 }
 
 describe('cloud usage schema', () => {
+  it('accepts concise Unicode device aliases and rejects unsafe names', () => {
+    expect(normalizeDeviceName('  设计部 Mac  ')).toBe('设计部 Mac')
+    expect(normalizeDeviceName('')).toBeNull()
+    expect(normalizeDeviceName('office\nPC')).toBeNull()
+    expect(normalizeDeviceName('设备'.repeat(17))).toBeNull()
+  })
+
   it('accepts privacy-safe device summaries and aggregates daily contribution', () => {
     const first = parseDeviceUsage(envelope('device_0001', 'Office PC', 100), '2026-07-12T08:01:00.000Z')
     const second = parseDeviceUsage(envelope('device_0002', 'Laptop', 300), '2026-07-12T08:02:00.000Z')

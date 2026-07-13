@@ -228,6 +228,13 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
   }
 }
 
+export function normalizeDeviceName(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const name = value.trim()
+  if (!name || Array.from(name).length > 32 || /[\u0000-\u001f\u007f]/.test(name)) return null
+  return name
+}
+
 function selectAccountQuota(devices: StoredDeviceUsage[]): StoredQuota | undefined {
   const quotas = devices
     .map((item) => item.quota)
