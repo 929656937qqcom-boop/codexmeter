@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-electron/
+agent/dist/
 release/
 outputs/
 downloads/*
@@ -18,3 +19,6 @@ esp32/**/build/
 .env.*
 !.env.example
 esp32/**/secrets.h
+
+# Local Netlify folder
+.netlify

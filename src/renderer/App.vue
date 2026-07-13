@@ -7,6 +7,10 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Cloud,
+  Copy,
+  ExternalLink,
+  KeyRound,
   Link2,
   Minus,
   Monitor,
@@ -20,12 +24,27 @@ import appIcon from './assets/icon.png'
 import { buildBleUsagePayload } from '../shared/device'
 import { sampleQuotaSnapshot, type QuotaSnapshot, type QuotaWindow, type ResetCard } from '../shared/quota'
 import type { AppSettings, RefreshIntervalMinutes } from '../shared/settings'
-import type { CodexUsageSummary, UsagePeriodSummary, UsageTokenTotals } from '../shared/usageAnalytics'
+import type {
+  CodexUsageSummary,
+  UsageDailyProjectSummary,
+  UsageDailySummary,
+  UsagePeriodSummary,
+  UsageReconciliationDay,
+  UsageTokenTotals
+} from '../shared/usageAnalytics'
 
 const BLE_SERVICE_UUID = '6f4d0001-9c8f-4c2a-9f12-000000000001'
 const BLE_USAGE_UUID = '6f4d0002-9c8f-4c2a-9f12-000000000002'
 
 type UsagePeriodKey = 'today' | 'sevenDays' | 'month'
+type UsageInsightView = 'trend' | 'reconciliation' | 'details'
+
+interface UsageTrendPoint {
+  date: string
+  total: number
+  x: number
+  y: number
+}
 
 const isWidgetView = new URLSearchParams(window.location.search).get('view') === 'widget'
 const snapshot = ref<QuotaSnapshot | null>(null)
@@ -33,8 +52,9 @@ const settings = ref<AppSettings | null>(null)
 const loading = ref(false)
 const usageLoading = ref(false)
 const status = ref('就绪')
-const activeDashboardView = ref<'quota' | 'usage'>('quota')
 const activeUsagePeriod = ref<UsagePeriodKey>('today')
+const activeUsageInsight = ref<UsageInsightView>('trend')
+const selectedUsageDate = ref('')
 const usageSummary = ref<CodexUsageSummary | null>(null)
 const widgetVisible = ref(false)
 const alwaysOnTop = ref(false)
@@ -45,6 +65,18 @@ const hardwareConnectionState = ref<'未连接' | '连接中' | '已连接' | '�
 const hardwareAutoSync = ref(true)
 const hardwareLastPushedAt = ref<string | undefined>()
 const hardwareDialogVisible = ref(false)
+const cloudDialogVisible = ref(false)
+const cloudEnabled = ref(false)
+const cloudEndpointInput = ref('')
+const cloudSyncKeyInput = ref('')
+const cloudSaving = ref(false)
+const cloudKeyGenerating = ref(false)
+const cloudDashboardOpening = ref(false)
+const cloudPairingBusy = ref(false)
+const cloudPairCode = ref('')
+const cloudPairExpiresAt = ref<string | undefined>()
+const cloudSyncedAt = ref<string | undefined>()
+const cloudStatusText = ref('尚未开启')
 const bleConnected = ref(false)
 const bleDeviceName = ref('')
 let bleCharacteristic: BluetoothRemoteGATTCharacteristic | undefined
@@ -196,6 +228,7 @@ const hardwareConnectionSummary = computed(() => {
   }
   return '未连接'
 })
+const cloudStateLabel = computed(() => cloudEnabled.value ? cloudSyncedAt.value ? '已同步' : '已开启' : '关闭')
 const usagePeriods = computed<Array<{ key: UsagePeriodKey; label: string; hint: string; period: UsagePeriodSummary }>>(() => {
   const summary = usageSummary.value
   if (!summary) {
@@ -222,7 +255,63 @@ const usageSplitItems = computed(() => {
 const topUsageTools = computed(() => usageSummary.value?.tools.slice(0, 2) ?? [])
 const topUsageSkills = computed(() => usageSummary.value?.skills.slice(0, 1) ?? [])
 const topUsageProjects = computed(() => usageSummary.value?.projects.slice(0, 3) ?? [])
+const topUsageThreads = computed(() => usageSummary.value?.threads.slice(0, 3) ?? [])
 const todayUsageTasks = computed(() => usageSummary.value?.tasks.slice(0, 2) ?? [])
+const dailyUsageSeries = computed(() => usageSummary.value?.dailyUsage ?? [])
+const usageTrendMax = computed(() => Math.max(1, ...dailyUsageSeries.value.map((day) => day.total.totalTokens)))
+const usageTrendPoints = computed<UsageTrendPoint[]>(() => {
+  const days = dailyUsageSeries.value
+  const lastIndex = Math.max(1, days.length - 1)
+  return days.map((day, index) => ({
+    date: day.date,
+    total: day.total.totalTokens,
+    x: 4 + (index / lastIndex) * 92,
+    y: 75 - (day.total.totalTokens / usageTrendMax.value) * 57
+  }))
+})
+const usageTrendLinePath = computed(() => buildUsageTrendPath(usageTrendPoints.value))
+const usageTrendAreaPath = computed(() => {
+  const points = usageTrendPoints.value
+  if (!points.length) {
+    return ''
+  }
+  return `${buildUsageTrendPath(points)} L ${points.at(-1)?.x ?? 96} 77 L ${points[0].x} 77 Z`
+})
+const selectedUsageDay = computed<UsageDailySummary | null>(() => {
+  const days = dailyUsageSeries.value
+  return days.find((day) => day.date === selectedUsageDate.value) ?? days.at(-1) ?? null
+})
+const selectedUsageProjects = computed<UsageDailyProjectSummary[]>(() => {
+  const projects = selectedUsageDay.value?.projects ?? []
+  if (projects.length <= 5) {
+    return projects
+  }
+
+  const visible = projects.slice(0, 4)
+  const rest = projects.slice(4)
+  const other = rest.reduce<UsageDailyProjectSummary>((total, project) => {
+    total.events += project.events
+    addUsageTokenTotals(total, project)
+    return total
+  }, {
+    name: `其他 ${rest.length} 个项目`,
+    path: rest.map((project) => project.name).join('、'),
+    events: 0,
+    ...emptyTokenTotals()
+  })
+  return [...visible, other]
+})
+const usageReconciliationDays = computed(() => [...(usageSummary.value?.reconciliation ?? [])].reverse())
+const reconciledUsageDays = computed(() => usageReconciliationDays.value.filter((day) => day.officialTokens !== undefined))
+const reconciliationContribution = computed(() => {
+  const days = reconciledUsageDays.value
+  const official = days.reduce((total, day) => total + (day.officialTokens ?? 0), 0)
+  const local = days.reduce((total, day) => total + day.localTokens, 0)
+  return official > 0 ? (local / official) * 100 : undefined
+})
+const latestOfficialUsageDate = computed(() => usageSummary.value?.officialUsage.dailyUsage.at(-1)?.date)
+const latestReliableOfficialLag = computed(() => usageSummary.value?.officialUsage.history?.days.filter((day) => day.lagReliable).at(-1))
+const dataQualityTitle = computed(() => usageSummary.value?.dataQuality.notes.join('；') ?? '')
 
 onMounted(async () => {
   const handleCopy = () => showNotice('已复制到剪贴板')
@@ -257,8 +346,19 @@ onMounted(async () => {
     const widgetState = await window.codexMeter.getWidgetState()
     widgetVisible.value = widgetState.visible
     alwaysOnTop.value = widgetState.visible ? widgetState.alwaysOnTop : false
+    const cloud = await window.codexMeter.getCloudSync()
+    cloudEnabled.value = cloud.enabled
+    cloudEndpointInput.value = cloud.endpoint
+    cloudSyncKeyInput.value = cloud.syncKey ?? ''
+    cloudSyncedAt.value = cloud.syncedAt
+    cloudStatusText.value = cloud.error ?? (cloud.syncedAt ? `最近同步 ${compactDateTime(cloud.syncedAt)}` : cloud.enabled ? '等待首次同步' : '尚未开启')
   } else {
-    settings.value = { refreshIntervalMinutes: 5, hardwareDisplayEnabled: true }
+    settings.value = {
+      refreshIntervalMinutes: 5,
+      hardwareDisplayEnabled: true,
+      cloudSyncEnabled: false,
+      cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+    }
     hardwareAutoSync.value = true
   }
 
@@ -333,10 +433,131 @@ function openHardwareDialog(): void {
   hardwareStatusText.value = ''
 }
 
+function openCloudDialog(): void {
+  cloudDialogVisible.value = true
+  if (!window.codexMeter) return
+  cloudStatusText.value = '正在读取同步状态...'
+  void window.codexMeter.getCloudSync().then((cloud) => {
+    cloudEnabled.value = cloud.enabled
+    cloudEndpointInput.value = cloud.endpoint
+    cloudSyncKeyInput.value = cloud.syncKey ?? ''
+    cloudSyncedAt.value = cloud.syncedAt
+    cloudStatusText.value = cloud.error ?? (cloud.syncedAt ? `最近同步 ${compactDateTime(cloud.syncedAt)}` : cloud.enabled ? '等待首次同步' : '尚未开启')
+  }).catch((error) => {
+    cloudStatusText.value = error instanceof Error ? `读取失败：${error.message}` : '读取同步状态失败'
+  })
+}
+
+async function generateCloudKey(): Promise<void> {
+  if (!window.codexMeter || cloudKeyGenerating.value) return
+  cloudKeyGenerating.value = true
+  cloudStatusText.value = '正在生成同步密钥...'
+  try {
+    cloudSyncKeyInput.value = (await window.codexMeter.generateCloudSyncKey()).syncKey
+    cloudStatusText.value = '已生成新密钥，请在其他设备或云端看板中使用同一密钥'
+  } catch (error) {
+    cloudStatusText.value = error instanceof Error ? `生成失败：${error.message}` : '生成同步密钥失败'
+  } finally {
+    cloudKeyGenerating.value = false
+  }
+}
+
+async function copyCloudKey(): Promise<void> {
+  if (!cloudSyncKeyInput.value) return
+  try {
+    await navigator.clipboard.writeText(cloudSyncKeyInput.value)
+    cloudStatusText.value = '同步密钥已复制到剪贴板'
+    showNotice('同步密钥已复制')
+  } catch {
+    cloudStatusText.value = '复制失败，请选中密钥后按 Ctrl+C'
+  }
+}
+
+async function saveCloudSyncSettings(): Promise<void> {
+  if (!window.codexMeter || cloudSaving.value) return
+  cloudSaving.value = true
+  cloudStatusText.value = cloudEnabled.value ? '正在保存并同步...' : '正在保存设置...'
+  try {
+    const state = await window.codexMeter.saveCloudSync(
+      cloudEnabled.value,
+      cloudEndpointInput.value,
+      cloudSyncKeyInput.value || undefined
+    )
+    cloudEnabled.value = state.enabled
+    cloudEndpointInput.value = state.endpoint
+    cloudSyncKeyInput.value = state.syncKey ?? ''
+    if (state.enabled) {
+      const result = await window.codexMeter.syncCloudNow()
+      cloudSyncedAt.value = result.syncedAt
+      cloudStatusText.value = result.synced ? `同步成功 ${compactDateTime(result.syncedAt ?? '')}` : result.error ?? '同步失败'
+      if (!result.synced) return
+    } else {
+      cloudStatusText.value = '尚未开启'
+    }
+    showNotice(state.enabled ? '云端设置已保存并同步' : '云端同步已关闭')
+    cloudDialogVisible.value = false
+  } catch (error) {
+    cloudStatusText.value = error instanceof Error ? `保存失败：${error.message}` : '保存云端设置失败'
+  } finally {
+    cloudSaving.value = false
+  }
+}
+
+async function openCloudDashboard(): Promise<void> {
+  if (!window.codexMeter || cloudDashboardOpening.value) return
+  cloudDashboardOpening.value = true
+  cloudStatusText.value = '正在打开网页看板...'
+  try {
+    await window.codexMeter.openCloudDashboard()
+    cloudStatusText.value = cloudSyncedAt.value ? `最近同步 ${compactDateTime(cloudSyncedAt.value)}` : '网页看板已打开'
+  } catch (error) {
+    cloudStatusText.value = error instanceof Error ? `打开失败：${error.message}` : '打开网页看板失败'
+  } finally {
+    cloudDashboardOpening.value = false
+  }
+}
+
+async function createCloudPairCode(): Promise<void> {
+  if (!window.codexMeter || cloudPairingBusy.value) return
+  cloudPairingBusy.value = true
+  cloudStatusText.value = '正在生成一次性配对码...'
+  try {
+    await window.codexMeter.saveCloudSync(cloudEnabled.value, cloudEndpointInput.value, cloudSyncKeyInput.value || undefined)
+    const result = await window.codexMeter.createCloudPairingCode()
+    cloudPairCode.value = result.code
+    cloudPairExpiresAt.value = result.expiresAt
+    cloudStatusText.value = `配对码 ${result.code}，10 分钟内有效且只能使用一次`
+  } catch (error) {
+    cloudStatusText.value = error instanceof Error ? `生成失败：${error.message}` : '生成配对码失败'
+  } finally {
+    cloudPairingBusy.value = false
+  }
+}
+
+async function redeemCloudPairCode(): Promise<void> {
+  if (!window.codexMeter || cloudPairingBusy.value || !cloudPairCode.value.trim()) return
+  cloudPairingBusy.value = true
+  cloudStatusText.value = '正在加入同步空间...'
+  try {
+    cloudSyncKeyInput.value = (await window.codexMeter.redeemCloudPairingCode(cloudPairCode.value)).syncKey
+    cloudEnabled.value = true
+    await saveCloudSyncSettings()
+  } catch (error) {
+    cloudStatusText.value = error instanceof Error ? `加入失败：${error.message}` : '加入同步空间失败'
+  } finally {
+    cloudPairingBusy.value = false
+  }
+}
+
 async function updateInterval(value: number): Promise<void> {
   settings.value = window.codexMeter
     ? await window.codexMeter.saveRefreshInterval(value as RefreshIntervalMinutes)
-    : { refreshIntervalMinutes: value as RefreshIntervalMinutes, hardwareDisplayEnabled: true }
+    : {
+        refreshIntervalMinutes: value as RefreshIntervalMinutes,
+        hardwareDisplayEnabled: true,
+        cloudSyncEnabled: false,
+        cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+      }
   configureAutoRefresh(settings.value.refreshIntervalMinutes)
 }
 
@@ -348,7 +569,9 @@ async function saveHardwareDisplay(enabled = true): Promise<void> {
       : {
           refreshIntervalMinutes: settings.value?.refreshIntervalMinutes ?? 5,
           hardwareDisplayEnabled: Boolean(enabled && hardwareEndpointInput.value),
-          hardwareEndpoint: hardwareEndpointInput.value
+          hardwareEndpoint: hardwareEndpointInput.value,
+          cloudSyncEnabled: settings.value?.cloudSyncEnabled ?? false,
+          cloudEndpoint: settings.value?.cloudEndpoint ?? 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
         }
     hardwareEndpointInput.value = settings.value.hardwareEndpoint ?? hardwareEndpointInput.value.trim()
     hardwareAutoSync.value = settings.value.hardwareDisplayEnabled
@@ -880,6 +1103,113 @@ function usageSplitStyle(value: number): Record<string, string> {
   return { '--usage-split-width': `${Math.min(100, width)}%` }
 }
 
+function buildUsageTrendPath(points: UsageTrendPoint[]): string {
+  if (!points.length) {
+    return ''
+  }
+
+  let path = `M ${points[0].x} ${points[0].y}`
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]
+    const current = points[index]
+    const controlOffset = (current.x - previous.x) * 0.42
+    path += ` C ${previous.x + controlOffset} ${previous.y}, ${current.x - controlOffset} ${current.y}, ${current.x} ${current.y}`
+  }
+  return path
+}
+
+function addUsageTokenTotals(target: UsageTokenTotals, source: UsageTokenTotals): void {
+  target.inputTokens += source.inputTokens
+  target.cachedInputTokens += source.cachedInputTokens
+  target.outputTokens += source.outputTokens
+  target.reasoningOutputTokens += source.reasoningOutputTokens
+  target.totalTokens += source.totalTokens
+}
+
+function usageDayLabel(dateValue: string): string {
+  const date = usageDayDate(dateValue)
+  if (!date) {
+    return '--'
+  }
+  return `${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
+function usageDayWeekday(dateValue: string): string {
+  const date = usageDayDate(dateValue)
+  if (!date) {
+    return '--'
+  }
+  return `周${'日一二三四五六'[date.getUTCDay()]}`
+}
+
+function usageDayDate(dateValue: string): Date | null {
+  const match = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) {
+    return null
+  }
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+}
+
+function usageDayTitle(day: UsageDailySummary): string {
+  const projects = day.projects
+    .slice(0, 5)
+    .map((project) => `${project.name} ${formatTokenCount(project.totalTokens)}`)
+    .join('，')
+  return `${day.date}：${formatTokenCount(day.total.totalTokens)}${projects ? `；${projects}` : ''}`
+}
+
+function reconciliationStatusLabel(day: UsageReconciliationDay): string {
+  if (day.status === 'close') return '接近'
+  if (day.status === 'different') return '存在差异'
+  if (day.status === 'official-behind') return '官方待同步'
+  return '暂无官方数据'
+}
+
+function reconciliationStatusClass(day: UsageReconciliationDay): string {
+  return `is-${day.status}`
+}
+
+function formatContribution(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '--'
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)}%`
+}
+
+function formatLagMinutes(value: number): string {
+  if (value < 60) return `${value} 分钟`
+  const hours = value / 60
+  return hours < 24 ? `${hours.toFixed(1)} 小时` : `${(hours / 24).toFixed(1)} 天`
+}
+
+function usageProjectShare(project: UsageDailyProjectSummary): number {
+  const total = selectedUsageDay.value?.total.totalTokens ?? 0
+  return total > 0 ? (project.totalTokens / total) * 100 : 0
+}
+
+function usageProjectDisplayName(project: UsageDailyProjectSummary): string {
+  if (project.name.startsWith('其他 ')) {
+    return project.name
+  }
+  const duplicates = (selectedUsageDay.value?.projects ?? []).filter((item) => item.name === project.name)
+  if (duplicates.length <= 1) {
+    return project.name
+  }
+  const parts = project.path.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean)
+  return parts.slice(-2).join(' / ') || project.name
+}
+
+function formatUsageShare(project: UsageDailyProjectSummary): string {
+  const share = usageProjectShare(project)
+  if (share > 0 && share < 1) {
+    return '<1%'
+  }
+  return `${Math.round(share)}%`
+}
+
+function usageProjectStyle(project: UsageDailyProjectSummary): Record<string, string> {
+  const share = usageProjectShare(project)
+  return { '--usage-project-share': `${share > 0 ? Math.max(2, share) : 0}%` }
+}
+
 function compactDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -996,6 +1326,72 @@ function compactDateTime(value: string): string {
       </div>
     </Transition>
 
+    <Transition name="notice">
+      <div v-if="cloudDialogVisible" class="hardware-connect-backdrop" @click.self="cloudDialogVisible = false">
+        <section class="hardware-connect-popover cloud-sync-popover">
+          <div class="hardware-connect-head">
+            <div>
+              <strong>云端多设备汇总</strong>
+              <span>仅上传设备 ID 和 Token 汇总，不上传对话、项目路径、文件内容或 Codex OAuth</span>
+            </div>
+            <button type="button" aria-label="关闭" @click="cloudDialogVisible = false">×</button>
+          </div>
+
+          <div class="cloud-sync-form">
+            <label>
+              <span>服务地址</span>
+              <NInput v-model:value="cloudEndpointInput" size="small" placeholder="https://.../api/usage" />
+            </label>
+            <label>
+              <span>同步密钥</span>
+              <div class="cloud-key-field">
+                <KeyRound :size="14" :stroke-width="2" />
+                <NInput v-model:value="cloudSyncKeyInput" type="password" size="small" placeholder="cm_sync_..." />
+                <button type="button" title="复制密钥" aria-label="复制密钥" @click="copyCloudKey">
+                  <Copy :size="14" :stroke-width="2" />
+                </button>
+              </div>
+            </label>
+            <div class="cloud-key-actions">
+              <NButton size="small" ghost :loading="cloudKeyGenerating" @click="generateCloudKey">生成新密钥</NButton>
+              <NButton size="small" ghost :loading="cloudDashboardOpening" @click="openCloudDashboard">
+                <template #icon><ExternalLink :size="14" /></template>
+                打开网页看板
+              </NButton>
+            </div>
+            <div class="cloud-pair-panel">
+              <div class="cloud-pair-copy">
+                <strong>多设备配对</strong>
+                <span>{{ cloudPairExpiresAt ? `有效至 ${compactDateTime(cloudPairExpiresAt)}` : '旧设备生成配对码，新设备输入后加入' }}</span>
+              </div>
+              <div class="cloud-pair-row">
+                <NInput v-model:value="cloudPairCode" size="small" maxlength="8" placeholder="8 位配对码" />
+                <NButton size="small" ghost :loading="cloudPairingBusy" @click="createCloudPairCode">生成</NButton>
+                <NButton size="small" type="primary" :loading="cloudPairingBusy" :disabled="!cloudPairCode.trim()" @click="redeemCloudPairCode">加入</NButton>
+              </div>
+            </div>
+          </div>
+
+          <div class="hardware-control-panel">
+            <div class="hardware-sync-row">
+              <div><strong>自动同步</strong><span>启动和刷新分析数据时上传设备汇总</span></div>
+              <b>[{{ cloudEnabled ? '开启' : '关闭' }}]</b>
+              <NSwitch v-model:value="cloudEnabled" size="small" />
+            </div>
+            <div class="cloud-sync-status" :class="{ success: Boolean(cloudSyncedAt), error: cloudStatusText.includes('失败') }">
+              <Cloud :size="16" :stroke-width="2" />
+              <span>{{ cloudStatusText }}</span>
+            </div>
+          </div>
+
+          <div class="hardware-connect-actions">
+            <NButton size="small" @click="cloudDialogVisible = false">取消</NButton>
+            <NButton size="small" type="primary" :loading="cloudSaving" @click="saveCloudSyncSettings">保存并同步</NButton>
+          </div>
+        </section>
+      </div>
+    </Transition>
+
     <main v-if="isWidgetView" class="widget-shell is-collapsed">
       <button
         class="widget-orb"
@@ -1062,18 +1458,7 @@ function compactDateTime(value: string): string {
         </header>
 
         <div class="dashboard-status-strip">
-          <div class="dashboard-view-tabs" aria-label="面板切换">
-            <button type="button" :class="{ active: activeDashboardView === 'quota' }" @click="activeDashboardView = 'quota'">
-              额度
-            </button>
-            <button
-              type="button"
-              :class="{ active: activeDashboardView === 'usage' }"
-              @click="activeDashboardView = 'usage'; refreshUsageSummary()"
-            >
-              分析
-            </button>
-          </div>
+          <span class="dashboard-section-label">额度与 Token 分析</span>
           <b :class="systemState">{{ systemState === 'connected' ? 'ONLINE' : systemState === 'error' ? 'ERROR' : 'OFFLINE' }}</b>
           <em>Refresh</em>
           <strong>{{ refreshTime }}</strong>
@@ -1104,6 +1489,16 @@ function compactDateTime(value: string): string {
             <strong>{{ alwaysOnTop ? '开启' : '关闭' }}</strong>
           </button>
           <button
+            class="widget-control-button"
+            :class="{ active: cloudEnabled }"
+            type="button"
+            @click="openCloudDialog"
+          >
+            <Cloud :size="16" :stroke-width="2" />
+            <span>云端</span>
+            <strong>{{ cloudStateLabel }}</strong>
+          </button>
+          <button
             class="link-status-pill"
             :class="systemState"
             type="button"
@@ -1116,8 +1511,7 @@ function compactDateTime(value: string): string {
           </button>
         </div>
 
-        <template v-if="activeDashboardView === 'quota'">
-          <section class="quota-dial-grid" aria-label="Codex 用量额度">
+        <section class="quota-dial-grid" aria-label="Codex 用量额度">
           <article class="quota-dial-card five-hour" :class="fiveHourState">
             <div class="quota-dial-head">
               <span>
@@ -1161,9 +1555,7 @@ function compactDateTime(value: string): string {
               </div>
             </div>
           </article>
-        </section>
-
-        <section class="reset-card-list" aria-label="重置卡">
+          <section class="reset-card-list" aria-label="重置卡">
           <div class="reset-card-list-head">
             <span class="reset-card-list-title">
               <Ticket :size="16" :stroke-width="2" />
@@ -1183,9 +1575,9 @@ function compactDateTime(value: string): string {
               <strong>--</strong>
             </div>
           </section>
-        </template>
+        </section>
 
-        <section v-else class="usage-analytics-panel" aria-label="本机 token 分析">
+        <section class="usage-analytics-panel" aria-label="本机 token 分析">
           <div class="usage-period-grid">
             <button
               v-for="item in usagePeriods"
@@ -1211,52 +1603,206 @@ function compactDateTime(value: string): string {
             </div>
           </div>
 
-          <div class="usage-rank-grid">
-            <section class="usage-rank-card">
-              <h3>项目排行</h3>
-              <div v-for="project in topUsageProjects" :key="project.path" class="usage-rank-row">
-                <span :title="project.path">{{ project.name }}</span>
-                <strong :title="`最近活跃 ${compactDateTime(project.lastActive)}`">
-                  {{ formatTokenCount(project.totalTokens) }} · {{ compactDay(project.lastActive) }}
-                </strong>
+          <section class="usage-insight-card">
+            <header class="usage-insight-header">
+              <div>
+                <strong>{{ activeUsageInsight === 'trend' ? '最近 7 天' : activeUsageInsight === 'reconciliation' ? '账号对账' : '排行与任务' }}</strong>
+                <span v-if="activeUsageInsight === 'trend' && selectedUsageDay">
+                  {{ usageDayLabel(selectedUsageDay.date) }} · {{ formatTokenCount(selectedUsageDay.total.totalTokens) }}
+                </span>
+                <span v-else-if="activeUsageInsight === 'reconciliation'">
+                  官方更新至 {{ latestOfficialUsageDate ? usageDayLabel(latestOfficialUsageDate) : '--' }} · 本机贡献为估算
+                </span>
+                <span v-else>项目、线程、工具与今日任务</span>
               </div>
-              <div v-if="!topUsageProjects.length" class="usage-rank-row is-empty">
-                <span>暂无项目数据</span>
-                <strong>--</strong>
-              </div>
-            </section>
+              <nav class="usage-insight-tabs" aria-label="分析视图切换">
+                <button type="button" :class="{ active: activeUsageInsight === 'trend' }" @click="activeUsageInsight = 'trend'">趋势</button>
+                <button type="button" :class="{ active: activeUsageInsight === 'reconciliation' }" @click="activeUsageInsight = 'reconciliation'">对账</button>
+                <button type="button" :class="{ active: activeUsageInsight === 'details' }" @click="activeUsageInsight = 'details'">排行</button>
+              </nav>
+            </header>
 
-            <section class="usage-rank-card">
-              <h3>工具 / Skill</h3>
-              <div v-for="tool in topUsageTools" :key="tool.name" class="usage-rank-row">
-                <span>{{ tool.name }}</span>
-                <strong :title="`工具输出约 ${formatToolCost(tool.outputChars)}`">
-                  {{ tool.calls }}次 · {{ formatToolCost(tool.outputChars) }}
-                </strong>
+            <div v-if="activeUsageInsight === 'trend'" class="usage-trend-layout">
+              <div class="usage-trend-chart">
+                <div class="usage-trend-summary">
+                  <span>每日 token</span>
+                  <strong>峰值 {{ formatTokenCount(usageTrendMax) }}</strong>
+                </div>
+                <svg class="usage-trend-svg" viewBox="0 0 100 80" preserveAspectRatio="none" aria-label="最近 7 天 token 趋势">
+                  <defs>
+                    <linearGradient id="usageTrendAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.28" />
+                      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.02" />
+                    </linearGradient>
+                  </defs>
+                  <line v-for="gridY in [20, 48, 76]" :key="gridY" x1="4" :y1="gridY" x2="96" :y2="gridY" class="usage-trend-grid-line" />
+                  <path v-if="usageTrendAreaPath" :d="usageTrendAreaPath" class="usage-trend-area" />
+                  <path v-if="usageTrendLinePath" :d="usageTrendLinePath" class="usage-trend-line" />
+                  <g
+                    v-for="(point, index) in usageTrendPoints"
+                    :key="point.date"
+                    class="usage-trend-point"
+                    :class="{ selected: selectedUsageDay?.date === point.date }"
+                  >
+                    <line v-if="selectedUsageDay?.date === point.date" :x1="point.x" y1="14" :x2="point.x" y2="77" class="usage-trend-guide" />
+                    <circle :cx="point.x" :cy="point.y" r="2.3" />
+                    <title>{{ usageDayTitle(dailyUsageSeries[index]) }}</title>
+                  </g>
+                </svg>
+                <div class="usage-trend-days">
+                  <button
+                    v-for="day in dailyUsageSeries"
+                    :key="day.date"
+                    type="button"
+                    :class="{ active: selectedUsageDay?.date === day.date }"
+                    :title="usageDayTitle(day)"
+                    @mouseenter="selectedUsageDate = day.date"
+                    @focus="selectedUsageDate = day.date"
+                    @click="selectedUsageDate = day.date"
+                  >
+                    <span>{{ usageDayWeekday(day.date) }}</span>
+                    <strong>{{ formatTokenCount(day.total.totalTokens) }}</strong>
+                    <small>{{ usageDayLabel(day.date) }}</small>
+                  </button>
+                </div>
               </div>
-              <div v-for="skill in topUsageSkills" :key="skill.name" class="usage-rank-row skill">
-                <span>{{ skill.name }}</span>
-                <strong>{{ skill.hits }}次</strong>
-              </div>
-              <div v-if="!topUsageTools.length && !topUsageSkills.length" class="usage-rank-row is-empty">
-                <span>暂无工具数据</span>
-                <strong>--</strong>
-              </div>
-            </section>
-          </div>
 
-          <section class="usage-task-board">
-            <div class="usage-task-head">
-              <strong>今日任务</strong>
-              <span>{{ todayUsagePeriod.events }} token_count · {{ todayUsagePeriod.toolCalls }} tools</span>
+              <section class="usage-daily-projects">
+                <header>
+                  <div>
+                    <span>{{ selectedUsageDay ? `${usageDayLabel(selectedUsageDay.date)} 项目` : '项目构成' }}</span>
+                    <strong>{{ selectedUsageDay ? formatTokenCount(selectedUsageDay.total.totalTokens) : '--' }}</strong>
+                  </div>
+                  <em>{{ selectedUsageDay?.events ?? 0 }} 次</em>
+                </header>
+                <div class="usage-daily-project-list">
+                  <div
+                    v-for="(project, index) in selectedUsageProjects"
+                    :key="project.path"
+                    class="usage-daily-project-row"
+                    :class="`tone-${index % 5}`"
+                    :title="project.path"
+                  >
+                    <div>
+                      <span>{{ usageProjectDisplayName(project) }}</span>
+                      <strong>{{ formatTokenCount(project.totalTokens) }} · {{ formatUsageShare(project) }}</strong>
+                    </div>
+                    <i :style="usageProjectStyle(project)" />
+                  </div>
+                  <div v-if="!selectedUsageProjects.length" class="usage-daily-project-empty">当天暂无 token 记录</div>
+                </div>
+              </section>
             </div>
-            <div v-for="task in todayUsageTasks" :key="`${task.kind}-${task.source}-${task.updatedAt}`" class="usage-task-row">
-              <span>{{ task.title }}</span>
-              <time>{{ task.kind === 'automation' ? task.source : compactDateTime(task.updatedAt) }}</time>
+
+            <div v-else-if="activeUsageInsight === 'reconciliation'" class="usage-reconciliation-layout">
+              <div class="usage-reconciliation-summary">
+                <div>
+                  <span>账号累计</span>
+                  <strong>{{ formatTokenCount(usageSummary?.officialUsage.lifetimeTokens ?? 0) }}</strong>
+                  <small>{{ usageSummary?.officialUsage.available ? '官方账号口径' : '暂未获取' }}</small>
+                </div>
+                <div>
+                  <span>已对账日期</span>
+                  <strong>{{ reconciledUsageDays.length }} / 7</strong>
+                  <small v-if="latestReliableOfficialLag">
+                    最近入账 {{ formatLagMinutes(latestReliableOfficialLag.firstSeenLagMinutes) }}
+                  </small>
+                  <small v-else>已记录 {{ usageSummary?.officialUsage.history?.snapshotCount ?? 0 }} 个官方快照</small>
+                </div>
+                <div>
+                  <span>本机贡献率</span>
+                  <strong>{{ formatContribution(reconciliationContribution) }}</strong>
+                  <small>{{ usageSummary?.device?.name ?? '当前电脑' }} · 仅统计已有官方日桶</small>
+                </div>
+              </div>
+
+              <div class="usage-reconciliation-table">
+                <div class="usage-reconciliation-row is-head">
+                  <span>日期</span><span>本机日志</span><span>官方账号</span><span>贡献率</span><span>状态</span>
+                </div>
+                <div
+                  v-for="day in usageReconciliationDays"
+                  :key="day.date"
+                  class="usage-reconciliation-row"
+                  :class="reconciliationStatusClass(day)"
+                >
+                  <strong>{{ usageDayLabel(day.date) }}</strong>
+                  <span>{{ formatTokenCount(day.localTokens) }}</span>
+                  <span>{{ day.officialTokens === undefined ? '--' : formatTokenCount(day.officialTokens) }}</span>
+                  <span>{{ formatContribution(day.contributionPercent) }}</span>
+                  <em>{{ reconciliationStatusLabel(day) }}</em>
+                </div>
+              </div>
+              <p class="usage-reconciliation-note">
+                官方数据可能延迟；临时线程、云端任务和其他设备不会完整出现在本机日志中。
+              </p>
             </div>
-            <div v-if="!todayUsageTasks.length" class="usage-task-row is-empty">
-              <span>暂无本机任务记录</span>
-              <time>--</time>
+
+            <div v-else class="usage-details-layout">
+              <div class="usage-rank-grid">
+                <section class="usage-rank-card">
+                  <h3>项目排行</h3>
+                  <div v-for="project in topUsageProjects" :key="project.path" class="usage-rank-row">
+                    <span :title="project.path">{{ project.name }}</span>
+                    <strong :title="`最近活跃 ${compactDateTime(project.lastActive)}`">
+                      {{ formatTokenCount(project.totalTokens) }} · {{ compactDay(project.lastActive) }}
+                    </strong>
+                  </div>
+                  <div v-if="!topUsageProjects.length" class="usage-rank-row is-empty">
+                    <span>暂无项目数据</span>
+                    <strong>--</strong>
+                  </div>
+                </section>
+
+                <section class="usage-rank-card">
+                  <h3>线程排行</h3>
+                  <div v-for="thread in topUsageThreads" :key="thread.id" class="usage-rank-row">
+                    <span :title="`${thread.title} · ${thread.workspace}`">{{ thread.title }}</span>
+                    <strong :title="`${thread.events} 次 token_count · ${compactDateTime(thread.lastActive)}`">
+                      {{ formatTokenCount(thread.totalTokens) }} · {{ compactDay(thread.lastActive) }}
+                    </strong>
+                  </div>
+                  <div v-if="!topUsageThreads.length" class="usage-rank-row is-empty">
+                    <span>暂无线程数据</span>
+                    <strong>--</strong>
+                  </div>
+                </section>
+
+                <section class="usage-rank-card">
+                  <h3>工具 / Skill</h3>
+                  <div v-for="tool in topUsageTools" :key="tool.name" class="usage-rank-row">
+                    <span>{{ tool.name }}</span>
+                    <strong :title="`工具输出约 ${formatToolCost(tool.outputChars)}`">
+                      {{ tool.calls }}次 · {{ formatToolCost(tool.outputChars) }}
+                    </strong>
+                  </div>
+                  <div v-for="skill in topUsageSkills" :key="skill.name" class="usage-rank-row skill">
+                    <span>{{ skill.name }}</span>
+                    <strong>{{ skill.hits }}次</strong>
+                  </div>
+                  <div v-if="!topUsageTools.length && !topUsageSkills.length" class="usage-rank-row is-empty">
+                    <span>暂无工具数据</span>
+                    <strong>--</strong>
+                  </div>
+                </section>
+              </div>
+
+              <section class="usage-task-board">
+                <div class="usage-task-head">
+                  <strong>今日任务</strong>
+                  <span :title="dataQualityTitle">
+                    本地完整度 {{ usageSummary?.dataQuality.score ?? 0 }}% · {{ todayUsagePeriod.events }} token_count · {{ todayUsagePeriod.toolCalls }} tools
+                  </span>
+                </div>
+                <div v-for="task in todayUsageTasks" :key="`${task.kind}-${task.source}-${task.updatedAt}`" class="usage-task-row">
+                  <span>{{ task.title }}</span>
+                  <time>{{ task.kind === 'automation' ? task.source : compactDateTime(task.updatedAt) }}</time>
+                </div>
+                <div v-if="!todayUsageTasks.length" class="usage-task-row is-empty">
+                  <span>暂无本机任务记录</span>
+                  <time>--</time>
+                </div>
+              </section>
             </div>
           </section>
         </section>

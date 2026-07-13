@@ -4,6 +4,15 @@ import type { QuotaSnapshot } from '../shared/quota.js'
 import type { AppSettings } from '../shared/settings.js'
 import type { CodexUsageSummary } from '../shared/usageAnalytics.js'
 
+type CloudSyncState = {
+  enabled: boolean
+  endpoint: string
+  syncKey?: string
+  synced: boolean
+  syncedAt?: string
+  error?: string
+}
+
 const api = {
   refreshQuota: () => ipcRenderer.invoke('quota:refresh') as Promise<QuotaSnapshot>,
   getLatestQuota: () => ipcRenderer.invoke('quota:latest') as Promise<QuotaSnapshot>,
@@ -13,6 +22,14 @@ const api = {
     ipcRenderer.invoke('settings:saveRefreshInterval', minutes) as Promise<AppSettings>,
   saveHardwareDisplay: (enabled: boolean, endpoint?: string) =>
     ipcRenderer.invoke('settings:saveHardwareDisplay', enabled, endpoint) as Promise<AppSettings>,
+  getCloudSync: () => ipcRenderer.invoke('cloud:get') as Promise<CloudSyncState>,
+  generateCloudSyncKey: () => ipcRenderer.invoke('cloud:generateKey') as Promise<{ syncKey: string }>,
+  createCloudPairingCode: () => ipcRenderer.invoke('cloud:createPairingCode') as Promise<{ code: string; expiresAt: string }>,
+  redeemCloudPairingCode: (code: string) => ipcRenderer.invoke('cloud:redeemPairingCode', code) as Promise<{ syncKey: string }>,
+  saveCloudSync: (enabled: boolean, endpoint: string, syncKey?: string) =>
+    ipcRenderer.invoke('cloud:save', enabled, endpoint, syncKey) as Promise<CloudSyncState>,
+  syncCloudNow: () => ipcRenderer.invoke('cloud:syncNow') as Promise<{ synced: boolean; syncedAt?: string; error?: string }>,
+  openCloudDashboard: () => ipcRenderer.invoke('cloud:openDashboard') as Promise<{ opened: boolean }>,
   listDevices: () => ipcRenderer.invoke('devices:list') as Promise<DisplayDevice[]>,
   pingHardwareDisplay: (endpoint: string) =>
     ipcRenderer.invoke('devices:ping', endpoint) as Promise<{ connected: boolean }>,

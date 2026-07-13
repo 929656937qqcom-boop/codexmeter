@@ -140,10 +140,44 @@ describe('Codex local usage analytics', () => {
     expect(summary.periods.month.total.totalTokens).toBe(1680)
     expect(summary.periods.today.total.cachedInputTokens).toBe(400)
     expect(summary.periods.today.apiEstimateUsd).toBeCloseTo(0.0025, 4)
+    expect(summary.dailyUsage).toHaveLength(7)
+    expect(summary.dailyUsage.map((day) => day.date)).toEqual([
+      '2026-07-02',
+      '2026-07-03',
+      '2026-07-04',
+      '2026-07-05',
+      '2026-07-06',
+      '2026-07-07',
+      '2026-07-08'
+    ])
+    expect(summary.dailyUsage.find((day) => day.date === '2026-07-06')).toMatchObject({
+      events: 1,
+      total: { totalTokens: 580 },
+      projects: [{ name: '品线分析', totalTokens: 580 }]
+    })
+    expect(summary.dailyUsage.find((day) => day.date === '2026-07-08')).toMatchObject({
+      events: 1,
+      total: { totalTokens: 1100 },
+      projects: [{ name: 'CodexMeter', totalTokens: 1100 }]
+    })
+    expect(summary.dailyUsage.find((day) => day.date === '2026-07-07')?.total.totalTokens).toBe(0)
     expect(summary.projects[0]).toMatchObject({
       name: 'CodexMeter',
       totalTokens: 1100,
       sessions: 1
+    })
+    expect(summary.threads[0]).toMatchObject({
+      id: 'thread-a',
+      workspace: 'CodexMeter',
+      totalTokens: 1100,
+      events: 1,
+      userMessages: 1
+    })
+    expect(summary.dataQuality).toMatchObject({
+      score: 100,
+      tokenEvents: 2,
+      incrementalEvents: 2,
+      fallbackEvents: 0
     })
     expect(summary.tools[0]).toMatchObject({
       name: 'shell_command',
@@ -214,11 +248,19 @@ describe('Codex local usage analytics', () => {
 
     expect(summary.periods.today.total.totalTokens).toBe(700)
     expect(summary.periods.today.total.cachedInputTokens).toBe(150)
+    expect(summary.dailyUsage.at(-1)).toMatchObject({
+      date: '2026-07-08',
+      events: 2,
+      total: { totalTokens: 700 },
+      projects: [{ name: 'CodexMeter', totalTokens: 700 }]
+    })
     expect(summary.projects[0]).toMatchObject({
       name: 'CodexMeter',
       sessions: 2,
       totalTokens: 700
     })
+    expect(summary.dataQuality.fallbackEvents).toBe(1)
+    expect(summary.dataQuality.score).toBeLessThan(100)
   })
 
   it('keeps internal context and short acknowledgements out of the task board', () => {
@@ -238,6 +280,16 @@ describe('Codex local usage analytics', () => {
           type: 'message',
           role: 'user',
           content: [{ type: 'input_text', text: '<recommended_plugins> hidden plugin metadata </recommended_plugins>' }]
+        }
+      },
+      {
+        file: 'session-a.jsonl',
+        type: 'response_item',
+        timestamp: '2026-07-08T01:01:30.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<turn_aborted> The user interrupted the previous turn on purpose.' }]
         }
       },
       {

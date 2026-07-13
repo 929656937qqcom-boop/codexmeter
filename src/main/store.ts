@@ -15,9 +15,15 @@ type EncryptedCodexOAuthToken = {
   payload: string
 }
 
+type EncryptedSecret = {
+  encrypted: true
+  payload: string
+}
+
 type StoreSchema = {
   settings: AppSettings
   codexOAuth?: CodexOAuthToken | EncryptedCodexOAuthToken
+  cloudSyncKey?: string | EncryptedSecret
 }
 
 const store = new Store<StoreSchema>({
@@ -30,7 +36,7 @@ const store = new Store<StoreSchema>({
 })
 
 export function getSettings(): AppSettings {
-  return store.get('settings', defaultSettings)
+  return { ...defaultSettings, ...store.get('settings', defaultSettings) }
 }
 
 export function saveSettings(settings: AppSettings): AppSettings {
@@ -65,6 +71,34 @@ export function saveCodexOAuth(token: CodexOAuthToken) {
 
 export function clearCodexOAuth(): void {
   store.delete('codexOAuth')
+}
+
+export function getCloudSyncKey(): string | undefined {
+  const secret = store.get('cloudSyncKey')
+  if (!secret) return undefined
+  if (typeof secret === 'string') {
+    saveCloudSyncKey(secret)
+    return secret
+  }
+  if (!safeStorage.isEncryptionAvailable()) return undefined
+  try {
+    return safeStorage.decryptString(Buffer.from(secret.payload, 'base64'))
+  } catch {
+    store.delete('cloudSyncKey')
+    return undefined
+  }
+}
+
+export function saveCloudSyncKey(secret: string): string {
+  if (safeStorage.isEncryptionAvailable()) {
+    store.set('cloudSyncKey', {
+      encrypted: true,
+      payload: safeStorage.encryptString(secret).toString('base64')
+    })
+  } else {
+    store.set('cloudSyncKey', secret)
+  }
+  return secret
 }
 
 function encryptCodexOAuth(token: CodexOAuthToken): EncryptedCodexOAuthToken | CodexOAuthToken {

@@ -1,0 +1,53 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "agent/**"
+      - "cloud/**"
+      - "public/**"
+      - "build/**"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/build-macos.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm agent:build
+      - run: bash scripts/create-mac-icon.sh
+      - name: Package Intel and Apple Silicon
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder --mac dmg zip --x64 --arm64
+      - name: Package lightweight agents
+        run: |
+          NODE_VERSION=$(node -p "process.version")
+          bash scripts/package-mac-agent.sh x64 "$NODE_VERSION"
+          bash scripts/package-mac-agent.sh arm64 "$NODE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexMeter-macOS
+          path: |
+            release/*.dmg
+            release/*-mac.zip
+            release/CodexMeter-Agent-macOS-*.zip
+          if-no-files-found: error

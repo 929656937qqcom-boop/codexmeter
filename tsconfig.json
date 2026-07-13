@@ -9,5 +9,14 @@
     },
     "types": ["vitest/globals"]
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.vue", "src/shared/**/*.ts", "src/main/usageProvider.ts", "tests/**/*.ts"]
+  "include": [
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.vue",
+    "src/shared/**/*.ts",
+    "src/main/usageProvider.ts",
+    "src/main/accountUsageHistory.ts",
+    "src/main/deviceIdentity.ts",
+    "cloud/netlify/functions/_shared/schema.ts",
+    "tests/**/*.ts"
+  ]
 }

@@ -1,3 +1,10 @@
+packages:
+  - "cloud"
+
 allowBuilds:
+  '@parcel/watcher': true
   electron: true
   esbuild: true
+  netlify-cli: true
+  sharp: true
+  unix-dgram: true

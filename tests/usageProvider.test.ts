@@ -52,6 +52,11 @@ describe('Codex usage provider', () => {
     const summary = readCodexUsageSummaryFromCodexHome(codexHome, new Date('2026-07-08T04:00:00.000Z'))
 
     expect(summary.periods.today.total.totalTokens).toBe(130)
+    expect(summary.dailyUsage.at(-1)).toMatchObject({
+      date: '2026-07-08',
+      total: { totalTokens: 130 },
+      projects: [{ name: 'CodexMeter', totalTokens: 130 }]
+    })
     expect(summary.projects[0]).toMatchObject({ name: 'CodexMeter', totalTokens: 130 })
     expect(summary.tasks.some((task) => task.source === 'codex-token')).toBe(true)
   })

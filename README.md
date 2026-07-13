@@ -1,6 +1,6 @@
 # CodexMeter
 
-CodexMeter 是一个本地运行的 Codex 用量监控桌面工具。它基于 Electron + Vue 3 构建，重点用于查看 Codex 额度、桌面悬浮球、小组件状态，以及本机 Codex session 日志中的 token 消耗趋势。
+CodexMeter 是一个跨平台 Codex 用量监控服务。云端网页负责多设备汇总和分析，Windows 桌面端提供额度与悬浮球，macOS 轻量采集器在后台读取本机 Codex 日志并安全同步。
 
 > 当前仓库是基于 `MrWanCC/CodexMeter` 的本地改造版本，保留原项目的非商业许可边界。
 
@@ -17,7 +17,29 @@ CodexMeter 是一个本地运行的 Codex 用量监控桌面工具。它基于 E
   - 今日任务看板
   - API 等效价值粗估
 - ESP32-C3 小屏硬件显示方案，支持 BLE / HTTP 推送
+- 云端多设备看板：每日曲线、Windows/macOS 贡献率、官方总量与本地覆盖率
+- 匿名事件指纹跨设备去重，同一账号官方日桶只计一次
+- 一次性 8 位配对码，新设备使用独立凭据加入同步空间
+- macOS Intel / Apple Silicon 轻量后台采集器，支持 Keychain 与开机运行
 - 本地安全存储授权信息，不主动发起模型请求
+
+云端看板：[CodexMeter Cloud](https://codexmeter-cloud-929656937.netlify.app)
+
+## macOS 测试
+
+GitHub Actions 会生成两份轻量采集器：
+
+- `CodexMeter-Agent-macOS-arm64.zip`：Apple Silicon（M1/M2/M3/M4 等）
+- `CodexMeter-Agent-macOS-x64.zip`：Intel Mac
+
+使用流程：
+
+1. 在已连接云端的 Windows CodexMeter 中打开“云端”，点击多设备配对区的“生成”。
+2. Mac 解压对应架构的 ZIP，右键打开 `Install CodexMeter Agent.command`。
+3. 输入 8 位配对码。安装器会完成首次同步，并注册每 5 分钟运行的 `launchd` 服务。
+4. 双击 `Open Dashboard.command` 可打开网页看板；不用时运行 `Uninstall CodexMeter Agent.command`。
+
+同步凭据保存在 macOS Keychain。采集器不会上传提示词、回复、项目路径、文件内容、OAuth 或原始线程 ID。
 
 ## 项目截图
 
@@ -43,7 +65,7 @@ CodexMeter 是一个本地运行的 Codex 用量监控桌面工具。它基于 E
 
 - Node.js 20+
 - pnpm
-- Windows 10/11
+- Windows 10/11；Mac 采集器由 GitHub Actions 在 macOS 构建
 
 ```powershell
 pnpm install
@@ -56,6 +78,7 @@ pnpm dev
 pnpm test
 pnpm build
 pnpm dist:portable
+pnpm agent:build
 ```
 
 构建产物默认输出到 `dist/`、`dist-electron/` 和 `release/`，这些目录不会提交到 Git。
@@ -69,6 +92,8 @@ src/
   renderer/   Vue 页面、小组件与样式
   shared/     主进程与渲染进程共享类型和解析逻辑
 tests/        单元测试和 UI 尺寸回归测试
+agent/        Windows/macOS 轻量后台采集器与 Mac 安装脚本
+cloud/        Netlify API、设备聚合协议与云端网页
 docs/         使用说明、硬件说明和展示图片
 esp32/        ESP32-C3 固件草图
 scripts/      构建辅助脚本

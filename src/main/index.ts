@@ -1,14 +1,19 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, shell, Tray } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { NoopDeviceBridge } from './deviceBridge.js'
 import { cancelCodexOAuth, startCodexOAuth } from './oauth.js'
 import { fetchQuotaSnapshot } from './quotaProvider.js'
-import { clearCodexOAuth, getCodexOAuth, getSettings, saveSettings } from './store.js'
+import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, saveCloudSyncKey, saveSettings } from './store.js'
 import { readCodexUsageSummary } from './usageProvider.js'
+import { fetchOfficialAccountUsage } from './accountUsageProvider.js'
+import { recordOfficialUsageSnapshot } from './accountUsageHistory.js'
+import { getOrCreateDeviceProfile } from './deviceIdentity.js'
+import { createCloudSyncKey, createPairingCode, redeemPairingCode, syncDeviceUsage, type CloudSyncResult } from './cloudSync.js'
 import { HttpDeviceBridge, type DeviceBridge } from '../shared/device.js'
 import { unavailableQuotaSnapshot, type QuotaSnapshot } from '../shared/quota.js'
-import { isRefreshIntervalMinutes, normalizeHardwareEndpoint } from '../shared/settings.js'
+import { isRefreshIntervalMinutes, normalizeCloudEndpoint, normalizeHardwareEndpoint } from '../shared/settings.js'
+import { attachDeviceProfile, attachOfficialUsage } from '../shared/usageAnalytics.js'
 
 const devServerUrl = process.env.CODEXMETER_DEV_SERVER_URL
 const __filename = fileURLToPath(import.meta.url)
@@ -27,6 +32,7 @@ let latestSnapshot: QuotaSnapshot | null = null
 let widgetAlwaysOnTop = false
 let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
+let latestCloudSync: CloudSyncResult = { synced: false }
 
 function hardwareConnectionError(): Error {
   return new Error('无法连接外部小屏，请确认 ESP32-C3 已连接 Wi-Fi，且电脑与设备在同一局域网。')
@@ -45,13 +51,15 @@ function configureBluetoothPermissions(): void {
 
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
-    width: 690,
-    height: 620,
+    width: 1120,
+    height: 920,
+    minWidth: 980,
+    minHeight: 820,
     useContentSize: true,
     frame: false,
     transparent: true,
-    resizable: false,
-    maximizable: false,
+    resizable: true,
+    maximizable: true,
     title: 'CodexMeter',
     icon: appIconPath,
     backgroundColor: '#00000000',
@@ -181,6 +189,7 @@ async function showMainWindow(): Promise<{ visible: boolean }> {
 
 function createTray(): void {
   const image = nativeImage.createFromPath(appIconPath).resize({ width: 16, height: 16 })
+  if (process.platform === 'darwin') image.setTemplateImage(true)
   tray = new Tray(image)
   tray.setToolTip('CodexMeter')
   tray.setContextMenu(
@@ -244,7 +253,29 @@ function broadcastQuotaSnapshot(snapshot: QuotaSnapshot): void {
 }
 
 ipcMain.handle('quota:refresh', async () => refreshQuotaAndBroadcast())
-ipcMain.handle('usage:summary', () => readCodexUsageSummary())
+
+async function buildUsageSummary() {
+  const localSummary = attachDeviceProfile(
+    readCodexUsageSummary(),
+    getOrCreateDeviceProfile(path.join(app.getPath('userData'), 'device-profile.json'), new Date(), app.getVersion())
+  )
+  const officialUsage = recordOfficialUsageSnapshot(
+    path.join(app.getPath('userData'), 'official-usage-history.json'),
+    await fetchOfficialAccountUsage()
+  )
+  return attachOfficialUsage(localSummary, officialUsage)
+}
+
+ipcMain.handle('usage:summary', async () => {
+  const summary = await buildUsageSummary()
+  const settings = getSettings()
+  if (settings.cloudSyncEnabled && getCloudSyncKey()) {
+    void syncDeviceUsage(settings.cloudEndpoint, summary).then((result) => {
+      latestCloudSync = result
+    })
+  }
+  return summary
+})
 
 ipcMain.handle('quota:latest', async () => {
   if (latestSnapshot) {
@@ -276,6 +307,50 @@ ipcMain.handle('settings:saveHardwareDisplay', (_event, enabled: boolean, endpoi
   })
   deviceBridge = createDeviceBridge()
   return nextSettings
+})
+
+ipcMain.handle('cloud:get', () => {
+  const settings = getSettings()
+  return {
+    enabled: settings.cloudSyncEnabled,
+    endpoint: settings.cloudEndpoint,
+    syncKey: getCloudSyncKey(),
+    ...latestCloudSync
+  }
+})
+
+ipcMain.handle('cloud:generateKey', () => ({ syncKey: saveCloudSyncKey(createCloudSyncKey()) }))
+ipcMain.handle('cloud:createPairingCode', () => createPairingCode(getSettings().cloudEndpoint))
+ipcMain.handle('cloud:redeemPairingCode', async (_event, code: string) => ({ syncKey: saveCloudSyncKey(await redeemPairingCode(getSettings().cloudEndpoint, code)) }))
+
+ipcMain.handle('cloud:save', (_event, enabled: boolean, endpoint: string, syncKey?: string) => {
+  const normalizedEndpoint = normalizeCloudEndpoint(endpoint)
+  let key = syncKey?.trim() || getCloudSyncKey()
+  if (key && !/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(key)) throw new Error('同步凭据格式不正确')
+  if (enabled && !key) key = saveCloudSyncKey(createCloudSyncKey())
+  else if (key) saveCloudSyncKey(key)
+  const settings = saveSettings({
+    ...getSettings(),
+    cloudSyncEnabled: Boolean(enabled),
+    cloudEndpoint: normalizedEndpoint
+  })
+  return { enabled: settings.cloudSyncEnabled, endpoint: settings.cloudEndpoint, syncKey: key, ...latestCloudSync }
+})
+
+ipcMain.handle('cloud:syncNow', async () => {
+  const settings = getSettings()
+  if (!settings.cloudSyncEnabled) return { synced: false, error: '云端同步尚未开启' }
+  latestCloudSync = await syncDeviceUsage(settings.cloudEndpoint, await buildUsageSummary())
+  return latestCloudSync
+})
+
+ipcMain.handle('cloud:openDashboard', async () => {
+  const dashboard = new URL(getSettings().cloudEndpoint)
+  dashboard.pathname = '/'
+  dashboard.search = ''
+  dashboard.hash = ''
+  await shell.openExternal(dashboard.toString())
+  return { opened: true }
 })
 
 ipcMain.handle('devices:list', () => deviceBridge.listDevices())
@@ -360,6 +435,7 @@ ipcMain.handle('widget:setAlwaysOnTop', (_event, enabled: boolean) => {
 ipcMain.handle('widget:openMainWindow', async () => showMainWindow())
 
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin') app.dock?.setIcon(nativeImage.createFromPath(appIconPath))
   configureBluetoothPermissions()
   await createWindow()
   createTray()

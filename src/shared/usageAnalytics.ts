@@ -21,6 +21,114 @@ export interface UsageProjectSummary extends UsageTokenTotals {
   lastActive: string
 }
 
+export interface UsageThreadSummary extends UsageTokenTotals {
+  id: string
+  title: string
+  workspace: string
+  path: string
+  events: number
+  userMessages: number
+  lastActive: string
+}
+
+export interface UsageDataQuality {
+  score: number
+  level: 'high' | 'medium' | 'low'
+  files: number
+  tokenEvents: number
+  incrementalEvents: number
+  fallbackEvents: number
+  invalidEvents: number
+  notes: string[]
+}
+
+export interface UsageDeviceProfile {
+  id: string
+  name: string
+  platform: string
+  arch?: string
+  appVersion?: string
+  createdAt: string
+}
+
+export interface UsageSyncEventSource {
+  source: string
+  date: string
+  total: UsageTokenTotals
+}
+
+export interface UsageSyncEvent {
+  id: string
+  date: string
+  total: UsageTokenTotals
+}
+
+export interface UsageDeviceEnvelope {
+  schemaVersion: 2
+  generatedAt: string
+  device: UsageDeviceProfile
+  accountFingerprint?: string
+  periods: CodexUsageSummary['periods']
+  dailyUsage: Array<Pick<UsageDailySummary, 'date' | 'events' | 'total' | 'apiEstimateUsd'>>
+  officialUsage: Pick<OfficialAccountUsage, 'available' | 'fetchedAt' | 'dailyUsage'>
+  syncEvents: UsageSyncEvent[]
+  dataQuality: UsageDataQuality
+}
+
+export interface UsageDailyProjectSummary extends UsageTokenTotals {
+  name: string
+  path: string
+  events: number
+}
+
+export interface UsageDailySummary {
+  date: string
+  events: number
+  total: UsageTokenTotals
+  apiEstimateUsd: number
+  projects: UsageDailyProjectSummary[]
+}
+
+export interface OfficialUsageDailyBucket {
+  date: string
+  tokens: number
+}
+
+export interface OfficialAccountUsage {
+  available: boolean
+  fetchedAt: string
+  lifetimeTokens?: number
+  peakDailyTokens?: number
+  dailyUsage: OfficialUsageDailyBucket[]
+  history?: OfficialUsageHistorySummary
+  error?: string
+}
+
+export interface OfficialUsageHistoryDay {
+  date: string
+  firstSeenAt: string
+  lastChangedAt: string
+  revisions: number
+  firstSeenLagMinutes: number
+  lagReliable: boolean
+}
+
+export interface OfficialUsageHistorySummary {
+  snapshotCount: number
+  trackingStartedAt?: string
+  lastCapturedAt?: string
+  days: OfficialUsageHistoryDay[]
+}
+
+export interface UsageReconciliationDay {
+  date: string
+  localTokens: number
+  officialTokens?: number
+  differenceTokens?: number
+  contributionPercent?: number
+  status: 'close' | 'different' | 'official-behind' | 'pending'
+}
+
 export interface UsageToolSummary {
   name: string
   calls: number
@@ -60,6 +168,7 @@ export interface UsageAnalysisOptions {
 
 export interface CodexUsageSummary {
   generatedAt: string
+  device?: UsageDeviceProfile
   priceModel: {
     name: string
     inputPerMillionUsd: number
@@ -71,11 +180,48 @@ export interface CodexUsageSummary {
     sevenDays: UsagePeriodSummary
     month: UsagePeriodSummary
   }
+  dailyUsage: UsageDailySummary[]
+  officialUsage: OfficialAccountUsage
+  reconciliation: UsageReconciliationDay[]
   projects: UsageProjectSummary[]
+  threads: UsageThreadSummary[]
   tools: UsageToolSummary[]
   skills: UsageSkillSummary[]
   tasks: UsageTaskItem[]
+  dataQuality: UsageDataQuality
   boundaryNote: string
+  syncEventSources?: UsageSyncEventSource[]
+}
+
+export function attachDeviceProfile(summary: CodexUsageSummary, device: UsageDeviceProfile): CodexUsageSummary {
+  return { ...summary, device }
+}
+
+export function buildDeviceUsageEnvelope(
+  summary: CodexUsageSummary,
+  options: { accountFingerprint?: string; syncEvents?: UsageSyncEvent[] } = {}
+): UsageDeviceEnvelope {
+  if (!summary.device) throw new Error('Missing device profile')
+  return {
+    schemaVersion: 2,
+    generatedAt: summary.generatedAt,
+    device: summary.device,
+    accountFingerprint: options.accountFingerprint,
+    periods: summary.periods,
+    dailyUsage: summary.dailyUsage.map(({ date, events, total, apiEstimateUsd }) => ({
+      date,
+      events,
+      total,
+      apiEstimateUsd
+    })),
+    officialUsage: {
+      available: summary.officialUsage.available,
+      fetchedAt: summary.officialUsage.fetchedAt,
+      dailyUsage: summary.officialUsage.dailyUsage
+    },
+    syncEvents: options.syncEvents ?? [],
+    dataQuality: summary.dataQuality
+  }
 }
 
 const dayMs = 24 * 60 * 60 * 1000
@@ -116,23 +262,39 @@ export function analyzeCodexUsageEvents(
     sevenDays: emptyPeriod(),
     month: emptyPeriod()
   }
-  const sessions = new Map<string, { cwd: string; lastActive: string }>()
+  const sessions = new Map<string, { id: string; cwd: string; lastActive: string; title: string; userMessages: number }>()
   const projects = new Map<string, UsageProjectSummary>()
   const projectSessionKeys = new Map<string, Set<string>>()
+  const threads = new Map<string, UsageThreadSummary>()
+  const threadKeysBySession = new Map<string, string>()
+  const dailyUsage = createDailyUsageMap(todayStart)
+  const dailyProjects = new Map<string, Map<string, UsageDailyProjectSummary>>()
   const tools = new Map<string, UsageToolSummary>()
   const skills = new Map<string, UsageSkillSummary>()
   const pendingCalls = new Map<string, string>()
   const tasks: UsageTaskItem[] = []
+  const syncEventSources: UsageSyncEventSource[] = []
+  const sourceFiles = new Set<string>()
+  let invalidEvents = 0
+  let tokenEvents = 0
+  let incrementalEvents = 0
+  let fallbackEvents = 0
 
   for (const event of events) {
+    sourceFiles.add(event.file)
+    if (event.type === 'invalid') {
+      invalidEvents += 1
+      continue
+    }
     const timestamp = parseTimestamp(event.timestamp)
     const payload = asRecord(event.payload)
     const sessionKey = event.file
 
     if (event.type === 'session_meta') {
       const cwd = stringValue(payload?.cwd) ?? ''
+      const id = stringValue(payload?.id) ?? sessionKey
       const lastActive = timestamp?.toISOString() ?? ''
-      sessions.set(sessionKey, { cwd, lastActive })
+      sessions.set(sessionKey, { id, cwd, lastActive, title: '', userMessages: 0 })
       continue
     }
 
@@ -140,15 +302,27 @@ export function analyzeCodexUsageEvents(
       continue
     }
 
-    const session = sessions.get(sessionKey) ?? { cwd: '', lastActive: '' }
+    const session = sessions.get(sessionKey) ?? { id: sessionKey, cwd: '', lastActive: '', title: '', userMessages: 0 }
     session.lastActive = timestamp.toISOString()
     sessions.set(sessionKey, session)
 
     if (event.type === 'event_msg' && payload?.type === 'token_count') {
       const info = asRecord(payload.info)
-      const usage = readTokenUsage(asRecord(info?.last_token_usage) ?? asRecord(info?.total_token_usage))
+      const lastUsage = asRecord(info?.last_token_usage)
+      const totalUsage = asRecord(info?.total_token_usage)
+      const usage = readTokenUsage(lastUsage ?? totalUsage)
+      tokenEvents += 1
+      if (lastUsage) incrementalEvents += 1
+      else if (totalUsage) fallbackEvents += 1
       addToPeriods(periods, timestamp, todayStart, sevenDaysStart, monthStart, usage, 'events')
       addProjectUsage(projects, projectSessionKeys, session.cwd, sessionKey, timestamp, usage)
+      addThreadUsage(threads, threadKeysBySession, session, sessionKey, timestamp, usage)
+      addDailyUsage(dailyUsage, dailyProjects, timestamp, session.cwd, sessionKey, usage)
+      syncEventSources.push({
+        source: [session.id || sessionKey, timestamp.toISOString(), usage.inputTokens, usage.cachedInputTokens, usage.outputTokens, usage.totalTokens].join('|'),
+        date: shanghaiDateKey(timestamp),
+        total: { ...usage }
+      })
       continue
     }
 
@@ -178,8 +352,16 @@ export function analyzeCodexUsageEvents(
       if (payload.role === 'user') {
         addToPeriodCounters(periods, timestamp, todayStart, sevenDaysStart, monthStart, 'userMessages')
         if (isRealUserText(text)) {
+          session.title = compactText(text)
+          session.userMessages += 1
+          const threadKey = threadKeysBySession.get(sessionKey)
+          const thread = threadKey ? threads.get(threadKey) : undefined
+          if (thread) {
+            thread.title = session.title
+            thread.userMessages = session.userMessages
+          }
           tasks.push({
-            title: compactText(text),
+            title: session.title,
             source: workspaceName(session.cwd || event.file),
             updatedAt: timestamp.toISOString(),
             kind: 'thread'
@@ -192,6 +374,13 @@ export function analyzeCodexUsageEvents(
   for (const period of Object.values(periods)) {
     period.apiEstimateUsd = estimateApiValue(period.total)
   }
+
+  const dailyUsageSummaries = [...dailyUsage.values()].map((day) => {
+    day.apiEstimateUsd = estimateApiValue(day.total)
+    day.projects = [...(dailyProjects.get(day.date)?.values() ?? [])]
+      .sort((a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name))
+    return day
+  })
 
   for (const automation of options.automations ?? []) {
     tasks.push({
@@ -206,9 +395,19 @@ export function analyzeCodexUsageEvents(
     generatedAt: now.toISOString(),
     priceModel,
     periods,
+    dailyUsage: dailyUsageSummaries,
+    officialUsage: unavailableOfficialUsage(now),
+    reconciliation: dailyUsageSummaries.map((day) => ({
+      date: day.date,
+      localTokens: day.total.totalTokens,
+      status: 'pending'
+    })),
     projects: [...projects.values()]
       .sort((a, b) => b.totalTokens - a.totalTokens)
       .slice(0, 8),
+    threads: [...threads.values()]
+      .sort((a, b) => b.totalTokens - a.totalTokens || Date.parse(b.lastActive) - Date.parse(a.lastActive))
+      .slice(0, 12),
     tools: [...tools.values()]
       .sort((a, b) => toolCostScore(b) - toolCostScore(a) || b.calls - a.calls)
       .slice(0, 8),
@@ -223,8 +422,171 @@ export function analyzeCodexUsageEvents(
         return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
       })
       .slice(0, 8),
-    boundaryNote: '本机日志粗估，不代表 OpenAI/Codex 账号全量用量或实际账单。'
+    dataQuality: buildDataQuality(sourceFiles.size, tokenEvents, incrementalEvents, fallbackEvents, invalidEvents),
+    boundaryNote: '本机日志粗估，不代表 OpenAI/Codex 账号全量用量或实际账单。',
+    syncEventSources
   }
+}
+
+function addThreadUsage(
+  threads: Map<string, UsageThreadSummary>,
+  threadKeysBySession: Map<string, string>,
+  session: { id: string; cwd: string; lastActive: string; title: string; userMessages: number },
+  sessionKey: string,
+  timestamp: Date,
+  usage: UsageTokenTotals
+): void {
+  const key = session.id || sessionKey
+  const current = threads.get(key) ?? {
+    id: key,
+    title: session.title || '未命名线程',
+    workspace: workspaceName(session.cwd || sessionKey),
+    path: session.cwd,
+    events: 0,
+    userMessages: session.userMessages,
+    lastActive: timestamp.toISOString(),
+    ...emptyTotals()
+  }
+  current.events += 1
+  current.userMessages = session.userMessages
+  current.lastActive = timestamp.toISOString()
+  if (session.title) current.title = session.title
+  addTotals(current, usage)
+  threads.set(key, current)
+  threadKeysBySession.set(sessionKey, key)
+}
+
+function buildDataQuality(
+  files: number,
+  tokenEvents: number,
+  incrementalEvents: number,
+  fallbackEvents: number,
+  invalidEvents: number
+): UsageDataQuality {
+  if (!tokenEvents) {
+    return {
+      score: 0,
+      level: 'low',
+      files,
+      tokenEvents,
+      incrementalEvents,
+      fallbackEvents,
+      invalidEvents,
+      notes: ['未找到 token_count 记录']
+    }
+  }
+
+  const fallbackPenalty = (fallbackEvents / tokenEvents) * 40
+  const invalidPenalty = Math.min(20, invalidEvents * 2)
+  const score = Math.max(0, Math.round(100 - fallbackPenalty - invalidPenalty))
+  const notes = ['临时线程、云端任务和未落盘调用不在本机日志内']
+  if (fallbackEvents) notes.push(`${fallbackEvents} 条记录使用累计值回退，可能产生偏差`)
+  if (invalidEvents) notes.push(`${invalidEvents} 条日志无法解析`)
+
+  return {
+    score,
+    level: score >= 90 ? 'high' : score >= 70 ? 'medium' : 'low',
+    files,
+    tokenEvents,
+    incrementalEvents,
+    fallbackEvents,
+    invalidEvents,
+    notes
+  }
+}
+
+export function attachOfficialUsage(
+  summary: CodexUsageSummary,
+  officialUsage: OfficialAccountUsage
+): CodexUsageSummary {
+  const officialByDate = new Map(officialUsage.dailyUsage.map((day) => [day.date, day.tokens]))
+  const reconciliation = summary.dailyUsage.map<UsageReconciliationDay>((day) => {
+    const localTokens = day.total.totalTokens
+    const officialTokens = officialByDate.get(day.date)
+    if (officialTokens === undefined) {
+      return { date: day.date, localTokens, status: 'pending' }
+    }
+
+    const differenceTokens = officialTokens - localTokens
+    const contributionPercent = officialTokens > 0 ? (localTokens / officialTokens) * 100 : undefined
+    if (officialTokens < localTokens) {
+      return {
+        date: day.date,
+        localTokens,
+        officialTokens,
+        differenceTokens,
+        contributionPercent,
+        status: 'official-behind'
+      }
+    }
+
+    const differenceRatio = officialTokens > 0 ? Math.abs(differenceTokens) / officialTokens : 0
+    return {
+      date: day.date,
+      localTokens,
+      officialTokens,
+      differenceTokens,
+      contributionPercent,
+      status: differenceRatio <= 0.05 ? 'close' : 'different'
+    }
+  })
+
+  return { ...summary, officialUsage, reconciliation }
+}
+
+function unavailableOfficialUsage(now: Date): OfficialAccountUsage {
+  return {
+    available: false,
+    fetchedAt: now.toISOString(),
+    dailyUsage: []
+  }
+}
+
+function createDailyUsageMap(todayStart: Date): Map<string, UsageDailySummary> {
+  const days = new Map<string, UsageDailySummary>()
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const start = new Date(todayStart.getTime() - offset * dayMs)
+    const date = shanghaiDateKey(start)
+    days.set(date, {
+      date,
+      events: 0,
+      total: emptyTotals(),
+      apiEstimateUsd: 0,
+      projects: []
+    })
+  }
+  return days
+}
+
+function addDailyUsage(
+  days: Map<string, UsageDailySummary>,
+  dailyProjects: Map<string, Map<string, UsageDailyProjectSummary>>,
+  timestamp: Date,
+  cwd: string,
+  sessionKey: string,
+  usage: UsageTokenTotals
+): void {
+  const date = shanghaiDateKey(timestamp)
+  const day = days.get(date)
+  if (!day) {
+    return
+  }
+
+  day.events += 1
+  addTotals(day.total, usage)
+
+  const path = cwd || sessionKey
+  const projects = dailyProjects.get(date) ?? new Map<string, UsageDailyProjectSummary>()
+  const project = projects.get(path) ?? {
+    name: workspaceName(path),
+    path,
+    events: 0,
+    ...emptyTotals()
+  }
+  project.events += 1
+  addTotals(project, usage)
+  projects.set(path, project)
+  dailyProjects.set(date, projects)
 }
 
 function addToPeriods(
@@ -348,6 +710,14 @@ function shanghaiMonthStart(date: Date): Date {
   return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) - shanghaiOffsetMs)
 }
 
+function shanghaiDateKey(date: Date): string {
+  const shifted = new Date(date.getTime() + shanghaiOffsetMs)
+  const year = shifted.getUTCFullYear()
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function parseTimestamp(value: string | undefined): Date | null {
   if (!value) return null
   const date = new Date(value)
@@ -387,12 +757,17 @@ function isRealUserText(text: string): boolean {
   }
 
   const internalPrefixes = [
+    '<turn_aborted>',
     '<heartbeat>',
     '<environment_context>',
+    '<app-context>',
+    '<collaboration_mode>',
+    '<permissions instructions>',
     '<recommended_plugins>',
     '<apps_instructions>',
     '<plugins_instructions>',
     '<personality_spec>',
+    '# In app browser:',
     '# AGENTS.md instructions'
   ]
   const acknowledgements = new Set(['好', '好的', '可以', '嗯', '嗯嗯', '行', 'OK', 'ok'])

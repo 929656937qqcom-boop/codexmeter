@@ -1,0 +1,71 @@
+import { createHash, randomBytes } from 'node:crypto'
+import { getCloudSyncKey } from './store.js'
+import { getAccountFingerprint } from './accountIdentity.js'
+import { buildDeviceUsageEnvelope, type CodexUsageSummary, type UsageSyncEvent } from '../shared/usageAnalytics.js'
+
+export interface CloudSyncResult {
+  synced: boolean
+  syncedAt?: string
+  error?: string
+}
+
+export function createCloudSyncKey(): string {
+  return `cm_sync_${randomBytes(32).toString('base64url')}`
+}
+
+export async function syncDeviceUsage(endpoint: string, summary: CodexUsageSummary): Promise<CloudSyncResult> {
+  const key = getCloudSyncKey()
+  if (!key) return { synced: false, error: '尚未生成同步密钥' }
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'CodexMeter/0.1'
+      },
+      body: JSON.stringify(buildDeviceUsageEnvelope(summary, {
+        accountFingerprint: getAccountFingerprint(),
+        syncEvents: buildSyncEvents(summary)
+      }))
+    })
+    if (!response.ok) return { synced: false, error: `云端同步失败 (${response.status})` }
+    return { synced: true, syncedAt: new Date().toISOString() }
+  } catch (error) {
+    return { synced: false, error: error instanceof Error ? error.message : '云端同步失败' }
+  }
+}
+
+export async function createPairingCode(endpoint: string): Promise<{ code: string; expiresAt: string }> {
+  const key = getCloudSyncKey()
+  if (!key) throw new Error('请先生成同步密钥')
+  const response = await fetch(apiUrl(endpoint, 'pair'), { method: 'POST', headers: { Authorization: `Bearer ${key}` } })
+  const data = await response.json() as { code?: string; expiresAt?: string; error?: string }
+  if (!response.ok || !data.code || !data.expiresAt) throw new Error(data.error ?? `生成配对码失败 (${response.status})`)
+  return { code: data.code, expiresAt: data.expiresAt }
+}
+
+export async function redeemPairingCode(endpoint: string, code: string): Promise<string> {
+  const url = apiUrl(endpoint, 'pair')
+  url.searchParams.set('code', code.trim().toUpperCase())
+  const response = await fetch(url)
+  const data = await response.json() as { token?: string; error?: string }
+  if (!response.ok || !data.token) throw new Error(data.error ?? `加入同步空间失败 (${response.status})`)
+  return data.token
+}
+
+function apiUrl(endpoint: string, resource: string): URL {
+  const url = new URL(endpoint)
+  url.pathname = `/api/${resource}`
+  url.search = ''
+  url.hash = ''
+  return url
+}
+
+function buildSyncEvents(summary: CodexUsageSummary): UsageSyncEvent[] {
+  return (summary.syncEventSources ?? []).slice(-5000).map((event) => ({
+    id: createHash('sha256').update(`codexmeter-event-v1:${event.source}`).digest('base64url'),
+    date: event.date,
+    total: event.total
+  }))
+}

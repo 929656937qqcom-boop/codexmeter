@@ -1,0 +1,16 @@
+{
+  "name": "codexmeter-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^9.1.2",
+    "@netlify/functions": "^4.2.5"
+  },
+  "devDependencies": {
+    "netlify-cli": "^23.1.3"
+  }
+}

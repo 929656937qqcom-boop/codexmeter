@@ -4,11 +4,30 @@ export interface AppSettings {
   refreshIntervalMinutes: RefreshIntervalMinutes
   hardwareDisplayEnabled: boolean
   hardwareEndpoint?: string
+  cloudSyncEnabled: boolean
+  cloudEndpoint: string
 }
 
 export const defaultSettings: AppSettings = {
   refreshIntervalMinutes: 5,
-  hardwareDisplayEnabled: true
+  hardwareDisplayEnabled: true,
+  cloudSyncEnabled: false,
+  cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+}
+
+export function normalizeCloudEndpoint(input: string | undefined): string {
+  const value = input?.trim()
+  if (!value) return defaultSettings.cloudEndpoint
+  const url = new URL(value)
+  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !(isLocal && url.protocol === 'http:')) {
+    throw new Error('Cloud endpoint must use HTTPS')
+  }
+  url.search = ''
+  url.hash = ''
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  if (!url.pathname.endsWith('/api/usage')) url.pathname = `${url.pathname}/api/usage`.replace(/\/+/g, '/')
+  return url.toString().replace(/\/$/, '')
 }
 
 export function isRefreshIntervalMinutes(value: number): value is RefreshIntervalMinutes {

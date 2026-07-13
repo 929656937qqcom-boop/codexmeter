@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>CodexMeter Cloud</title>
+    <link rel="icon" href="/icon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img src="/icon.png" alt="" />
+          <div><h1>CodexMeter Cloud</h1><p>账号级多设备 Token 汇总</p></div>
+        </div>
+        <div class="top-actions">
+          <span id="connectionState" class="connection-state">未连接</span>
+          <button id="refreshButton" type="button" hidden>刷新</button>
+          <button id="disconnectButton" type="button" hidden>断开</button>
+        </div>
+      </header>
+
+      <section id="pairingView" class="pairing-view">
+        <div class="pairing-copy">
+          <span class="eyebrow">安全配对</span>
+          <h2>输入桌面端的同步密钥</h2>
+          <p>同步密钥仅用于定位你的私有设备空间。云端不会接收 Codex OAuth、提示词、项目路径或文件内容。</p>
+        </div>
+        <form id="pairingForm" class="pairing-form">
+          <label><span>同步密钥</span><input id="syncKeyInput" type="password" autocomplete="off" placeholder="cm_sync_..." required /></label>
+          <div class="pairing-actions">
+            <button id="generateKeyButton" class="secondary" type="button">生成新密钥</button>
+            <button class="primary" type="submit">打开看板</button>
+          </div>
+          <p id="pairingError" class="form-error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="dashboardView" class="dashboard-view" hidden>
+        <section class="summary-band" aria-label="汇总指标">
+          <div><span>设备数量</span><strong id="deviceCount">0</strong><small>已同步电脑</small></div>
+          <div><span>今日 Token</span><strong id="todayTokens">0</strong><small id="todayDate">--</small></div>
+          <div><span>7 日 Token</span><strong id="weekTokens">0</strong><small>设备汇总</small></div>
+          <div><span>官方今日总量</span><strong id="officialTokens">--</strong><small>账号级，只计一次</small></div>
+          <div><span>本地覆盖率</span><strong id="coveragePercent">--</strong><small id="dedupState">等待设备数据</small></div>
+          <div><span>最近同步</span><strong id="lastSync">--</strong><small>服务器接收时间</small></div>
+        </section>
+
+        <section class="activity-panel">
+          <header><div><h2>每日 Token</h2><p>最近 14 天各设备贡献</p></div><strong id="peakValue">峰值 --</strong></header>
+          <div id="chart" class="chart" aria-label="每日 Token 柱状图"></div>
+        </section>
+
+        <section class="devices-panel">
+          <header><div><h2>设备贡献</h2><p>按最近同步时间排列</p></div></header>
+          <div id="deviceList" class="device-list"></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
