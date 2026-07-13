@@ -270,7 +270,7 @@ ipcMain.handle('usage:summary', async () => {
   const summary = await buildUsageSummary()
   const settings = getSettings()
   if (settings.cloudSyncEnabled && getCloudSyncKey()) {
-    void syncDeviceUsage(settings.cloudEndpoint, summary).then((result) => {
+    void syncDeviceUsage(settings.cloudEndpoint, summary, latestSnapshot ?? undefined).then((result) => {
       latestCloudSync = result
     })
   }
@@ -340,16 +340,25 @@ ipcMain.handle('cloud:save', (_event, enabled: boolean, endpoint: string, syncKe
 ipcMain.handle('cloud:syncNow', async () => {
   const settings = getSettings()
   if (!settings.cloudSyncEnabled) return { synced: false, error: '云端同步尚未开启' }
-  latestCloudSync = await syncDeviceUsage(settings.cloudEndpoint, await buildUsageSummary())
+  latestCloudSync = await syncDeviceUsage(settings.cloudEndpoint, await buildUsageSummary(), latestSnapshot ?? undefined)
   return latestCloudSync
 })
 
 ipcMain.handle('cloud:openDashboard', async () => {
-  const dashboard = new URL(getSettings().cloudEndpoint)
+  const settings = getSettings()
+  if (!getCloudSyncKey()) throw new Error('请先建立云端账号凭证')
+  const pairing = await createPairingCode(settings.cloudEndpoint)
+  const dashboard = new URL(settings.cloudEndpoint)
   dashboard.pathname = '/'
-  dashboard.search = ''
+  dashboard.searchParams.set('pair', pairing.code)
   dashboard.hash = ''
   await shell.openExternal(dashboard.toString())
+  void buildUsageSummary()
+    .then((summary) => syncDeviceUsage(settings.cloudEndpoint, summary, latestSnapshot ?? undefined))
+    .then((result) => { latestCloudSync = result })
+    .catch((error) => {
+      latestCloudSync = { synced: false, error: error instanceof Error ? error.message : '后台同步失败' }
+    })
   return { opened: true }
 })
 

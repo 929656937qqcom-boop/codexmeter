@@ -21,13 +21,14 @@ describe('usage device identity', () => {
 
     expect(second.id).toBe(first.id)
     expect(envelope).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       device: { id: first.id, name: first.name },
       dataQuality: { score: 0 }
     })
     expect(envelope).not.toHaveProperty('tasks')
-    expect(envelope).not.toHaveProperty('projects')
     expect(envelope).not.toHaveProperty('threads')
+    expect(envelope).toHaveProperty('analytics.projects')
+    expect(envelope).not.toHaveProperty('analytics.threads')
     expect(envelope).toHaveProperty('syncEvents')
     expect(envelope).toHaveProperty('officialUsage')
   })

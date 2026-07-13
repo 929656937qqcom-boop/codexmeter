@@ -56,6 +56,7 @@ async function syncOnce(): Promise<void> {
   const syncEvents = (summary.syncEventSources ?? []).slice(-5000).map((event) => ({
     id: createHash('sha256').update(`codexmeter-event-v1:${event.source}`).digest('base64url'),
     date: event.date,
+    projectName: event.projectName,
     total: event.total
   }))
   const accountFingerprint = accountId

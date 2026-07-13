@@ -1,3 +1,5 @@
+import type { QuotaSnapshot } from './quota.js'
+
 export interface UsageTokenTotals {
   inputTokens: number
   cachedInputTokens: number
@@ -54,24 +56,45 @@ export interface UsageDeviceProfile {
 export interface UsageSyncEventSource {
   source: string
   date: string
+  projectName: string
   total: UsageTokenTotals
 }
 
 export interface UsageSyncEvent {
   id: string
   date: string
+  projectName?: string
   total: UsageTokenTotals
 }
 
+export interface UsageCloudProjectSummary extends UsageTokenTotals {
+  name: string
+  sessions: number
+  lastActive: string
+}
+
+export interface UsageCloudDailyProjectSummary extends UsageTokenTotals {
+  name: string
+  events: number
+}
+
 export interface UsageDeviceEnvelope {
-  schemaVersion: 2
+  schemaVersion: 3
   generatedAt: string
   device: UsageDeviceProfile
   accountFingerprint?: string
   periods: CodexUsageSummary['periods']
-  dailyUsage: Array<Pick<UsageDailySummary, 'date' | 'events' | 'total' | 'apiEstimateUsd'>>
+  dailyUsage: Array<Pick<UsageDailySummary, 'date' | 'events' | 'total' | 'apiEstimateUsd'> & {
+    projects: UsageCloudDailyProjectSummary[]
+  }>
   officialUsage: Pick<OfficialAccountUsage, 'available' | 'fetchedAt' | 'dailyUsage'>
   syncEvents: UsageSyncEvent[]
+  analytics: {
+    projects: UsageCloudProjectSummary[]
+    tools: UsageToolSummary[]
+    skills: UsageSkillSummary[]
+  }
+  quota?: QuotaSnapshot
   dataQuality: UsageDataQuality
 }
 
@@ -199,20 +222,29 @@ export function attachDeviceProfile(summary: CodexUsageSummary, device: UsageDev
 
 export function buildDeviceUsageEnvelope(
   summary: CodexUsageSummary,
-  options: { accountFingerprint?: string; syncEvents?: UsageSyncEvent[] } = {}
+  options: { accountFingerprint?: string; syncEvents?: UsageSyncEvent[]; quota?: QuotaSnapshot } = {}
 ): UsageDeviceEnvelope {
   if (!summary.device) throw new Error('Missing device profile')
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: summary.generatedAt,
     device: summary.device,
     accountFingerprint: options.accountFingerprint,
     periods: summary.periods,
-    dailyUsage: summary.dailyUsage.map(({ date, events, total, apiEstimateUsd }) => ({
+    dailyUsage: summary.dailyUsage.map(({ date, events, total, apiEstimateUsd, projects }) => ({
       date,
       events,
       total,
-      apiEstimateUsd
+      apiEstimateUsd,
+      projects: projects.slice(0, 8).map(({ name, events, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }) => ({
+        name,
+        events,
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens
+      }))
     })),
     officialUsage: {
       available: summary.officialUsage.available,
@@ -220,6 +252,21 @@ export function buildDeviceUsageEnvelope(
       dailyUsage: summary.officialUsage.dailyUsage
     },
     syncEvents: options.syncEvents ?? [],
+    analytics: {
+      projects: summary.projects.slice(0, 8).map(({ name, sessions, lastActive, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }) => ({
+        name,
+        sessions,
+        lastActive,
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens
+      })),
+      tools: summary.tools.slice(0, 8),
+      skills: summary.skills.slice(0, 8)
+    },
+    quota: options.quota,
     dataQuality: summary.dataQuality
   }
 }
@@ -321,6 +368,7 @@ export function analyzeCodexUsageEvents(
       syncEventSources.push({
         source: [session.id || sessionKey, timestamp.toISOString(), usage.inputTokens, usage.cachedInputTokens, usage.outputTokens, usage.totalTokens].join('|'),
         date: shanghaiDateKey(timestamp),
+        projectName: workspaceName(session.cwd || sessionKey),
         total: { ...usage }
       })
       continue

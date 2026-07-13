@@ -24,37 +24,105 @@
 
       <section id="pairingView" class="pairing-view">
         <div class="pairing-copy">
-          <span class="eyebrow">安全配对</span>
-          <h2>输入桌面端的同步密钥</h2>
-          <p>同步密钥仅用于定位你的私有设备空间。云端不会接收 Codex OAuth、提示词、项目路径或文件内容。</p>
+          <span class="eyebrow">安全连接</span>
+          <h2>从 CodexMeter 打开云端看板</h2>
+          <p>桌面端会使用一次性配对码自动登录，无需复制长期凭证。也可在下方手动输入已有的账号或设备凭证。</p>
+          <ul>
+            <li>上传 Token 聚合值、设备信息和项目显示名</li>
+            <li>不上传提示词、回复、项目路径、文件或 Codex OAuth</li>
+          </ul>
         </div>
         <form id="pairingForm" class="pairing-form">
-          <label><span>同步密钥</span><input id="syncKeyInput" type="password" autocomplete="off" placeholder="cm_sync_..." required /></label>
-          <div class="pairing-actions">
-            <button id="generateKeyButton" class="secondary" type="button">生成新密钥</button>
-            <button class="primary" type="submit">打开看板</button>
-          </div>
+          <label><span>同步凭证</span><input id="syncKeyInput" type="password" autocomplete="off" placeholder="cm_sync_... / cm_device_..." required /></label>
+          <div class="pairing-actions"><button class="primary" type="submit">打开看板</button></div>
           <p id="pairingError" class="form-error" role="alert"></p>
         </form>
       </section>
 
       <section id="dashboardView" class="dashboard-view" hidden>
-        <section class="summary-band" aria-label="汇总指标">
-          <div><span>设备数量</span><strong id="deviceCount">0</strong><small>已同步电脑</small></div>
-          <div><span>今日 Token</span><strong id="todayTokens">0</strong><small id="todayDate">--</small></div>
-          <div><span>7 日 Token</span><strong id="weekTokens">0</strong><small>设备汇总</small></div>
-          <div><span>官方今日总量</span><strong id="officialTokens">--</strong><small>账号级，只计一次</small></div>
-          <div><span>本地覆盖率</span><strong id="coveragePercent">--</strong><small id="dedupState">等待设备数据</small></div>
-          <div><span>最近同步</span><strong id="lastSync">--</strong><small>服务器接收时间</small></div>
+        <div id="emptyNotice" class="empty-notice" hidden>
+          <strong>云端空间已连接，但还没有设备数据</strong>
+          <span>请回到 CodexMeter 点击“保存并同步”，完成后再刷新。</span>
+        </div>
+
+        <section class="quota-grid" aria-label="Codex 用量额度">
+          <article class="quota-card quota-five">
+            <header><strong>5 小时额度</strong><span id="fiveHourState">暂无数据</span></header>
+            <div class="quota-body">
+              <div id="fiveHourDial" class="quota-dial"><i><strong id="fiveHourRemaining">--</strong><small>剩余</small></i></div>
+              <div><span>已用 <strong id="fiveHourUsed">--</strong></span><span>重置 <strong id="fiveHourReset">--</strong></span></div>
+            </div>
+          </article>
+          <article class="quota-card quota-week">
+            <header><strong>一周额度</strong><span id="weekQuotaState">暂无数据</span></header>
+            <div class="quota-body">
+              <div id="weekQuotaDial" class="quota-dial"><i><strong id="weekRemaining">--</strong><small>剩余</small></i></div>
+              <div><span>已用 <strong id="weekUsed">--</strong></span><span>重置 <strong id="weekReset">--</strong></span></div>
+            </div>
+          </article>
+          <article class="quota-card reset-card">
+            <header><strong id="resetCardTitle">重置卡 · 0 张</strong><span>账号额度</span></header>
+            <p>可提前重置额度窗口</p>
+            <div id="resetCardList" class="reset-card-list"><span>暂无可用重置卡</span><strong>--</strong></div>
+          </article>
         </section>
 
-        <section class="activity-panel">
-          <header><div><h2>每日 Token</h2><p>最近 14 天各设备贡献</p></div><strong id="peakValue">峰值 --</strong></header>
-          <div id="chart" class="chart" aria-label="每日 Token 柱状图"></div>
+        <section class="period-grid" aria-label="Token 汇总">
+          <button class="period-card active" type="button" data-period="today">
+            <span>今日</span><strong id="todayTokens">0</strong><em id="todayValue">$0</em><small id="todayEvents">0 次</small>
+          </button>
+          <button class="period-card" type="button" data-period="sevenDays">
+            <span>7 日</span><strong id="weekTokens">0</strong><em id="weekValue">$0</em><small id="weekEvents">0 次</small>
+          </button>
+          <button class="period-card" type="button" data-period="month">
+            <span>本月</span><strong id="monthTokens">0</strong><em id="monthValue">$0</em><small id="monthEvents">0 次</small>
+          </button>
+        </section>
+
+        <section class="token-split" aria-label="Token 拆分">
+          <div><span>输入</span><strong id="inputTokens">0</strong><i><b id="inputBar"></b></i></div>
+          <div><span>缓存</span><strong id="cachedTokens">0</strong><i><b id="cachedBar"></b></i></div>
+          <div><span>输出</span><strong id="outputTokens">0</strong><i><b id="outputBar"></b></i></div>
+        </section>
+
+        <section class="insight-panel">
+          <header class="panel-header">
+            <div><h2>最近 7 天</h2><p id="selectedDaySummary">每日 Token 与项目构成</p></div>
+            <div class="account-summary">
+              <span id="deviceCount">0 台设备</span>
+              <span id="officialTokens">官方 --</span>
+              <span id="coveragePercent">覆盖率 --</span>
+            </div>
+          </header>
+          <div class="trend-layout">
+            <section class="trend-chart">
+              <div class="chart-summary"><span>每日 Token</span><strong id="peakValue">峰值 0</strong></div>
+              <svg id="trendSvg" viewBox="0 0 100 72" preserveAspectRatio="none" aria-label="最近 7 天 Token 趋势">
+                <defs><linearGradient id="trendArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#22d3ee" stop-opacity=".28"/><stop offset="100%" stop-color="#22d3ee" stop-opacity=".02"/></linearGradient></defs>
+                <g id="trendGrid"></g><path id="trendAreaPath" class="trend-area"></path><path id="trendLinePath" class="trend-line"></path><g id="trendPoints"></g>
+              </svg>
+              <div id="trendDays" class="trend-days"></div>
+            </section>
+            <section class="day-projects">
+              <header><div><span id="projectDayLabel">今日项目</span><strong id="projectDayTotal">0</strong></div><em id="projectDayEvents">0 次</em></header>
+              <div id="dayProjectList" class="project-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="details-grid">
+          <section class="rank-panel">
+            <header class="panel-header"><div><h2>项目排行</h2><p>各设备隐私化聚合</p></div></header>
+            <div id="projectRankList" class="rank-list"></div>
+          </section>
+          <section class="rank-panel">
+            <header class="panel-header"><div><h2>工具 / Skill</h2><p>调用次数与输出规模</p></div></header>
+            <div id="toolRankList" class="rank-list"></div>
+          </section>
         </section>
 
         <section class="devices-panel">
-          <header><div><h2>设备贡献</h2><p>按最近同步时间排列</p></div></header>
+          <header class="panel-header"><div><h2>设备贡献</h2><p id="syncMeta">按最近同步时间排列</p></div><strong id="dedupState">等待设备数据</strong></header>
           <div id="deviceList" class="device-list"></div>
         </section>
       </section>

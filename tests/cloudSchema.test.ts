@@ -64,4 +64,52 @@ describe('cloud usage schema', () => {
     expect(result.officialDailyUsage[0].tokens).toBe(180)
     expect(result.accountVerified).toBe(true)
   })
+
+  it('uses complete daily aggregates instead of truncating totals to the rolling event sample', () => {
+    const payload = {
+      ...envelope('device_0001', 'Windows', 600),
+      schemaVersion: 3,
+      dailyUsage: [{
+        ...envelope('device_0001', 'Windows', 600).dailyUsage[0],
+        projects: [{
+          name: 'CodexMeter',
+          events: 6,
+          inputTokens: 500,
+          cachedInputTokens: 50,
+          outputTokens: 50,
+          reasoningOutputTokens: 0,
+          totalTokens: 600
+        }]
+      }],
+      syncEvents: [{
+        id: 'event_fingerprint_000000000000000000000',
+        date: '2026-07-12',
+        projectName: 'CodexMeter',
+        total: envelope('x_device', 'x', 100).dailyUsage[0].total
+      }],
+      analytics: {
+        projects: [{
+          name: 'CodexMeter', sessions: 2, lastActive: '2026-07-12T08:00:00.000Z',
+          inputTokens: 500, cachedInputTokens: 50, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 600
+        }],
+        tools: [{ name: 'shell_command', calls: 3, outputChars: 900 }],
+        skills: [{ name: 'github-auto-sync', hits: 1 }]
+      },
+      quota: {
+        available: true,
+        refreshedAt: '2026-07-12T08:00:00.000Z',
+        source: 'codex',
+        windows: [{ code: '5h', percentUsed: 25, resetAt: '2026-07-12T10:00:00.000Z' }],
+        resetCards: [{ expiresAt: '2026-08-01T00:00:00.000Z' }]
+      }
+    }
+    const parsed = parseDeviceUsage(payload, '2026-07-12T08:01:00.000Z')
+    const result = aggregateDevices([parsed!], new Date('2026-07-12T10:00:00.000Z'))
+
+    expect(result.dailyUsage[0].totalTokens).toBe(600)
+    expect(result.dailyUsage[0].projects[0]).toMatchObject({ name: 'CodexMeter', totalTokens: 600 })
+    expect(result.projects[0]).toMatchObject({ name: 'CodexMeter', totalTokens: 600 })
+    expect(result.tools[0]).toMatchObject({ name: 'shell_command', calls: 3 })
+    expect(result.quota).toMatchObject({ available: true, windows: [{ code: '5h', percentUsed: 25 }] })
+  })
 })

@@ -116,8 +116,8 @@ app.whenReady().then(async () => {
     check(!(await value(window, `Boolean(document.querySelector('.cloud-sync-popover'))`)), '右上角关闭可点击')
 
     await click(window, cloudButton, '重新打开云端入口')
-    await click(window, `[...document.querySelectorAll('.cloud-key-actions button')].find((item) => item.textContent.includes('生成'))`, '生成新密钥')
-    check(calls.generate === 1, '生成新密钥可点击')
+    await click(window, `[...document.querySelectorAll('.cloud-key-actions button')].find((item) => item.textContent.includes('重新建立'))`, '重新建立云端空间')
+    check(calls.generate === 1, '重新建立云端空间可点击')
     check(await value(window, `document.querySelector('.cloud-key-field input').value === '${generatedKey}'`), '生成结果写入输入框')
 
     await click(window, `document.querySelector('.cloud-key-field > button')`, '复制密钥')

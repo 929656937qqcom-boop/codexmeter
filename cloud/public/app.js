@@ -1,9 +1,23 @@
-const state = { key: localStorage.getItem('codexmeter-sync-key') || '', data: null }
-const elements = Object.fromEntries([
-  'pairingView', 'dashboardView', 'pairingForm', 'syncKeyInput', 'generateKeyButton', 'pairingError',
-  'connectionState', 'refreshButton', 'disconnectButton', 'deviceCount', 'todayTokens', 'todayDate',
-  'weekTokens', 'officialTokens', 'coveragePercent', 'dedupState', 'lastSync', 'peakValue', 'chart', 'deviceList'
-].map((id) => [id, document.getElementById(id)]))
+const state = {
+  key: localStorage.getItem('codexmeter-sync-key') || '',
+  data: null,
+  activePeriod: 'today',
+  selectedDate: '',
+  emptyRetries: 0,
+  emptyRetryTimer: 0
+}
+
+const ids = [
+  'pairingView', 'dashboardView', 'pairingForm', 'syncKeyInput', 'pairingError', 'connectionState', 'refreshButton',
+  'disconnectButton', 'emptyNotice', 'todayTokens', 'todayValue', 'todayEvents', 'weekTokens', 'weekValue', 'weekEvents',
+  'fiveHourState', 'fiveHourDial', 'fiveHourRemaining', 'fiveHourUsed', 'fiveHourReset', 'weekQuotaState', 'weekQuotaDial',
+  'weekRemaining', 'weekUsed', 'weekReset', 'resetCardTitle', 'resetCardList',
+  'monthTokens', 'monthValue', 'monthEvents', 'inputTokens', 'cachedTokens', 'outputTokens', 'inputBar', 'cachedBar',
+  'outputBar', 'selectedDaySummary', 'deviceCount', 'officialTokens', 'coveragePercent', 'peakValue', 'trendSvg', 'trendGrid',
+  'trendAreaPath', 'trendLinePath', 'trendPoints', 'trendDays', 'projectDayLabel', 'projectDayTotal', 'projectDayEvents',
+  'dayProjectList', 'projectRankList', 'toolRankList', 'syncMeta', 'dedupState', 'deviceList'
+]
+const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]))
 
 elements.syncKeyInput.value = state.key
 elements.pairingForm.addEventListener('submit', async (event) => {
@@ -11,33 +25,52 @@ elements.pairingForm.addEventListener('submit', async (event) => {
   state.key = elements.syncKeyInput.value.trim()
   await loadDashboard(true)
 })
-elements.generateKeyButton.addEventListener('click', () => {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  const token = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-  elements.syncKeyInput.value = `cm_sync_${token}`
-  elements.syncKeyInput.type = 'text'
-  elements.syncKeyInput.select()
-})
 elements.refreshButton.addEventListener('click', () => loadDashboard(false))
 elements.disconnectButton.addEventListener('click', disconnect)
+document.querySelectorAll('.period-card').forEach((button) => button.addEventListener('click', () => {
+  state.activePeriod = button.dataset.period
+  document.querySelectorAll('.period-card').forEach((item) => item.classList.toggle('active', item === button))
+  renderSplit()
+}))
 
-if (state.key) loadDashboard(false)
+const pairCode = new URL(location.href).searchParams.get('pair')
+if (pairCode) redeemWebPair(pairCode)
+else if (state.key) loadDashboard(false)
+
+async function redeemWebPair(code) {
+  setBusy(true)
+  elements.connectionState.textContent = '正在安全登录'
+  try {
+    const response = await fetch(`/api/pair?code=${encodeURIComponent(code)}`)
+    const data = await response.json()
+    if (!response.ok || !data.token) throw new Error(data.error || '一次性登录码无效')
+    state.key = data.token
+    localStorage.setItem('codexmeter-sync-key', state.key)
+    history.replaceState(null, '', location.pathname)
+    await loadDashboard(false)
+  } catch (error) {
+    elements.pairingError.textContent = error instanceof Error ? error.message : '自动登录失败'
+    elements.connectionState.textContent = '连接失败'
+  } finally {
+    setBusy(false)
+  }
+}
 
 async function loadDashboard(persist) {
   setBusy(true)
   elements.pairingError.textContent = ''
   try {
-    if (!/^cm_sync_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw new Error('同步密钥格式不正确')
+    if (!/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw new Error('同步凭证格式不正确')
     const response = await fetch('/api/usage', { headers: { authorization: `Bearer ${state.key}` } })
-    if (!response.ok) throw new Error(response.status === 401 ? '同步密钥无效' : '云端数据读取失败')
+    if (!response.ok) throw new Error(response.status === 401 ? '同步凭证无效' : '云端数据读取失败')
     state.data = await response.json()
     if (persist) localStorage.setItem('codexmeter-sync-key', state.key)
-    renderDashboard(state.data)
+    renderDashboard()
     elements.pairingView.hidden = true
     elements.dashboardView.hidden = false
     elements.refreshButton.hidden = false
     elements.disconnectButton.hidden = false
-    elements.connectionState.textContent = '已连接'
+    elements.connectionState.textContent = state.data.deviceCount ? '已同步' : '已连接 · 待同步'
     elements.connectionState.classList.add('connected')
   } catch (error) {
     elements.pairingView.hidden = false
@@ -48,110 +81,174 @@ async function loadDashboard(persist) {
   }
 }
 
-function renderDashboard(data) {
+function renderDashboard() {
+  const data = state.data || {}
+  renderQuota(data.quota)
+  const periods = data.periods || {}
+  renderPeriod('today', periods.today, elements.todayTokens, elements.todayValue, elements.todayEvents)
+  renderPeriod('sevenDays', periods.sevenDays, elements.weekTokens, elements.weekValue, elements.weekEvents)
+  renderPeriod('month', periods.month, elements.monthTokens, elements.monthValue, elements.monthEvents)
+  renderSplit()
+
   const devices = Array.isArray(data.devices) ? data.devices : []
-  const daily = Array.isArray(data.dailyUsage) ? data.dailyUsage.slice(-14) : []
+  const daily = lastSevenDays(Array.isArray(data.dailyUsage) ? data.dailyUsage : [])
+  state.selectedDate = daily.some((day) => day.date === state.selectedDate) ? state.selectedDate : daily.at(-1)?.date || ''
+  elements.emptyNotice.hidden = devices.length > 0
+  scheduleEmptyRetry(devices.length)
+  elements.deviceCount.textContent = `${devices.length} 台设备`
+  renderTrend(daily)
+  renderSelectedDay(daily)
+  renderRanks(data)
+  renderDevices(devices)
+
   const todayKey = shanghaiDateKey(new Date())
   const today = daily.find((day) => day.date === todayKey)
   const official = (Array.isArray(data.officialDailyUsage) ? data.officialDailyUsage : []).find((day) => day.date === todayKey)
-  const weekStart = shanghaiDateKey(new Date(Date.now() - 6 * 86_400_000))
-  elements.deviceCount.textContent = String(devices.length)
-  elements.todayTokens.textContent = formatTokens(today?.totalTokens || 0)
-  elements.todayDate.textContent = todayKey
-  elements.weekTokens.textContent = formatTokens(daily.filter((day) => day.date >= weekStart).reduce((sum, day) => sum + number(day.totalTokens), 0))
-  elements.officialTokens.textContent = official ? formatTokens(official.tokens) : '--'
-  elements.coveragePercent.textContent = official?.tokens ? `${trim(number(today?.totalTokens) / official.tokens * 100)}%` : '--'
+  elements.officialTokens.textContent = `官方 ${official ? formatTokens(official.tokens) : '--'}`
+  elements.coveragePercent.textContent = `覆盖率 ${official?.tokens ? `${trim(number(today?.total?.totalTokens ?? today?.totalTokens) / official.tokens * 100)}%` : '--'}`
   elements.dedupState.textContent = `去重 ${number(data.deduplication?.duplicateEvents)} 条 · ${data.accountVerified ? '账号已校验' : '待账号校验'}`
-  elements.lastSync.textContent = formatTime(data.updatedAt)
-  const peak = Math.max(0, ...daily.map((day) => number(day.totalTokens)))
-  elements.peakValue.textContent = `峰值 ${formatTokens(peak)}`
-  renderChart(daily, devices, peak)
-  renderDevices(devices)
+  elements.syncMeta.textContent = data.updatedAt ? `最近同步 ${formatTime(data.updatedAt)}` : '尚未收到设备数据'
 }
 
-function renderChart(days, devices, peak) {
-  elements.chart.replaceChildren()
-  const padded = [...Array(Math.max(0, 14 - days.length)).fill(null), ...days]
-  for (const day of padded) {
-    const item = document.createElement('div')
-    item.className = 'chart-day'
-    const bar = document.createElement('div')
-    bar.className = 'chart-bar'
-    const totalHeight = day && peak ? Math.max(3, number(day.totalTokens) / peak * 170) : 0
-    bar.style.height = `${totalHeight}px`
-    for (const device of devices) {
-      const tokens = number(day?.devices?.[device.device.id])
-      if (!tokens || !day.totalTokens) continue
-      const segment = document.createElement('i')
-      segment.className = 'chart-segment'
-      segment.style.height = `${tokens / day.totalTokens * totalHeight}px`
-      segment.title = `${device.device.name}: ${formatTokens(tokens)}`
-      bar.append(segment)
-    }
-    const label = document.createElement('span')
-    label.textContent = day?.date?.slice(5).replace('-', '/') || ''
-    item.append(bar, label)
-    elements.chart.append(item)
+function scheduleEmptyRetry(deviceCount) {
+  clearTimeout(state.emptyRetryTimer)
+  if (deviceCount > 0) {
+    state.emptyRetries = 0
+    return
   }
+  if (state.emptyRetries >= 5) return
+  state.emptyRetryTimer = setTimeout(() => {
+    state.emptyRetries += 1
+    loadDashboard(false)
+  }, 3000)
+}
+
+function renderQuota(quota) {
+  const fiveHour = quota?.windows?.find((window) => window.code === '5h')
+  const week = quota?.windows?.find((window) => window.code === '7d')
+  renderQuotaWindow(fiveHour, elements.fiveHourDial, elements.fiveHourRemaining, elements.fiveHourUsed, elements.fiveHourReset, elements.fiveHourState, '#20c66f')
+  renderQuotaWindow(week, elements.weekQuotaDial, elements.weekRemaining, elements.weekUsed, elements.weekReset, elements.weekQuotaState, '#f0c51a')
+  const cards = Array.isArray(quota?.resetCards) ? quota.resetCards : []
+  elements.resetCardTitle.textContent = `重置卡 · ${cards.length} 张`
+  elements.resetCardList.replaceChildren(...(cards.length ? cards.slice(0, 3).map((card, index) => {
+    const row = document.createElement('div')
+    const expiry = new Date(card.expiresAt)
+    const remaining = Math.max(0, Math.ceil((expiry.getTime() - Date.now()) / 86_400_000))
+    row.innerHTML = `<span>第 ${index + 1} 张</span><strong>剩余 ${remaining} 天 · ${shortDate(card.expiresAt)}</strong>`
+    return row
+  }) : [rankRow('暂无可用重置卡', '--')]))
+}
+
+function renderQuotaWindow(window, dial, remaining, used, reset, stateElement, color) {
+  const available = Boolean(window)
+  const percentUsed = available ? Math.max(0, Math.min(100, number(window.percentUsed))) : 0
+  const percentRemaining = Math.round(100 - percentUsed)
+  dial.style.background = `conic-gradient(${color} 0 ${percentRemaining}%, #334155 ${percentRemaining}% 100%)`
+  remaining.textContent = available ? `${percentRemaining}%` : '--'
+  used.textContent = available ? `${trim(percentUsed)}%` : '--'
+  reset.textContent = available ? compactReset(window.resetAt) : '--'
+  stateElement.textContent = !available ? '暂无数据' : percentRemaining >= 50 ? '充足' : percentRemaining >= 20 ? '关注' : '紧张'
+}
+
+function renderPeriod(key, period, totalElement, valueElement, eventsElement) {
+  const safe = period || {}
+  totalElement.textContent = formatTokens(safe.total?.totalTokens || 0)
+  valueElement.textContent = formatUsd(safe.apiEstimateUsd || 0)
+  eventsElement.textContent = `${number(safe.events)} 次`
+}
+
+function renderSplit() {
+  const total = state.data?.periods?.[state.activePeriod]?.total || {}
+  const values = [number(total.inputTokens), number(total.cachedInputTokens), number(total.outputTokens)]
+  const max = Math.max(1, ...values)
+  elements.inputTokens.textContent = formatTokens(values[0])
+  elements.cachedTokens.textContent = formatTokens(values[1])
+  elements.outputTokens.textContent = formatTokens(values[2])
+  ;[elements.inputBar, elements.cachedBar, elements.outputBar].forEach((bar, index) => {
+    bar.style.width = `${values[index] ? Math.max(2, values[index] / max * 100) : 0}%`
+  })
+}
+
+function renderTrend(days) {
+  const peak = Math.max(0, ...days.map(dayTokens))
+  elements.peakValue.textContent = `峰值 ${formatTokens(peak)}`
+  elements.trendGrid.replaceChildren(...[18, 44, 70].map((y) => svg('line', { x1: 4, y1: y, x2: 96, y2: y, class: 'trend-grid-line' })))
+  const points = days.map((day, index) => ({
+    x: days.length === 1 ? 50 : 5 + index * (90 / Math.max(1, days.length - 1)),
+    y: 67 - (dayTokens(day) / Math.max(1, peak)) * 49,
+    day
+  }))
+  const line = smoothPath(points)
+  elements.trendLinePath.setAttribute('d', line)
+  elements.trendAreaPath.setAttribute('d', points.length ? `${line} L ${points.at(-1).x} 70 L ${points[0].x} 70 Z` : '')
+  elements.trendPoints.replaceChildren(...points.map((point) => {
+    const group = svg('g', { class: `trend-point${point.day.date === state.selectedDate ? ' selected' : ''}` })
+    if (point.day.date === state.selectedDate) group.append(svg('line', { x1: point.x, y1: 12, x2: point.x, y2: 70, class: 'trend-guide' }))
+    group.append(svg('circle', { cx: point.x, cy: point.y, r: 2.2 }))
+    return group
+  }))
+  elements.trendDays.replaceChildren(...days.map((day) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = day.date === state.selectedDate ? 'active' : ''
+    button.innerHTML = `<span>${weekday(day.date)}</span><strong>${formatTokens(dayTokens(day))}</strong><small>${day.date.slice(5).replace('-', '/')}</small>`
+    button.addEventListener('mouseenter', () => selectDay(day.date, days))
+    button.addEventListener('focus', () => selectDay(day.date, days))
+    button.addEventListener('click', () => selectDay(day.date, days))
+    return button
+  }))
+}
+
+function selectDay(date, days) {
+  state.selectedDate = date
+  renderTrend(days)
+  renderSelectedDay(days)
+}
+
+function renderSelectedDay(days) {
+  const day = days.find((item) => item.date === state.selectedDate)
+  const projects = Array.isArray(day?.projects) ? day.projects : []
+  elements.selectedDaySummary.textContent = day ? `${day.date.slice(5).replace('-', '/')} · ${formatTokens(dayTokens(day))}` : '每日 Token 与项目构成'
+  elements.projectDayLabel.textContent = day ? `${day.date.slice(5).replace('-', '/')} 项目` : '项目构成'
+  elements.projectDayTotal.textContent = formatTokens(dayTokens(day))
+  elements.projectDayEvents.textContent = `${number(day?.events)} 次`
+  elements.dayProjectList.replaceChildren(...(projects.length ? projects.slice(0, 5).map((project, index) => projectRow(project.name, project.totalTokens, dayTokens(day), index)) : [emptyRow('当天暂无项目数据')]))
+}
+
+function renderRanks(data) {
+  const projects = Array.isArray(data.projects) ? data.projects : []
+  const tools = Array.isArray(data.tools) ? data.tools : []
+  const skills = Array.isArray(data.skills) ? data.skills : []
+  elements.projectRankList.replaceChildren(...(projects.length ? projects.slice(0, 5).map((project) => rankRow(project.name, `${formatTokens(project.totalTokens)} · ${shortDate(project.lastActive)}`)) : [emptyRow('等待新版设备同步')]))
+  const operationRows = [
+    ...tools.slice(0, 4).map((tool) => rankRow(tool.name, `${number(tool.calls)} 次 · ${formatChars(tool.outputChars)}`)),
+    ...skills.slice(0, 2).map((skill) => rankRow(skill.name, `${number(skill.hits)} 次`))
+  ]
+  elements.toolRankList.replaceChildren(...(operationRows.length ? operationRows : [emptyRow('等待新版设备同步')]))
 }
 
 function renderDevices(devices) {
-  elements.deviceList.replaceChildren()
-  for (const item of devices) {
+  elements.deviceList.replaceChildren(...(devices.length ? devices.map((item) => {
     const card = document.createElement('article')
     card.className = 'device-card'
-    const head = document.createElement('div')
-    head.className = 'device-head'
-    const name = document.createElement('strong')
-    name.textContent = item.device.name
-    const actions = document.createElement('div')
-    actions.className = 'device-actions'
-    const status = document.createElement('span')
-    status.textContent = Date.now() - Date.parse(item.receivedAt) < 30 * 60_000 ? '在线' : '已同步'
-    const remove = document.createElement('button')
-    remove.type = 'button'
-    remove.textContent = '移除'
-    remove.addEventListener('click', () => removeDevice(item.device.id, item.device.name))
-    actions.append(status, remove)
-    head.append(name, actions)
-    const meta = document.createElement('div')
-    meta.className = 'device-meta'
-    meta.textContent = `${platformLabel(item.device.platform)} ${item.device.arch || ''} · v${item.device.appVersion || '--'} · ${formatTime(item.receivedAt)}`
-    const metrics = document.createElement('div')
-    metrics.className = 'device-metrics'
-    metrics.append(metric('今日贡献', item.contribution?.todayTokens), metric('7 日贡献', item.contribution?.sevenDaysTokens))
-    const quality = document.createElement('div')
-    quality.className = 'device-quality'
-    quality.textContent = `空间贡献 ${trim(number(item.contribution?.sharePercent))}% · 本地完整度 ${number(item.dataQuality.score)}%`
-    card.append(head, meta, metrics, quality)
-    elements.deviceList.append(card)
-  }
+    const online = Date.now() - Date.parse(item.receivedAt) < 30 * 60_000
+    card.innerHTML = `<div class="device-head"><strong></strong><div class="device-actions"><span>${online ? '在线' : '已同步'}</span><button type="button">移除</button></div></div><div class="device-meta"></div><div class="device-metrics"><div><span>今日贡献</span><strong>${formatTokens(item.contribution?.todayTokens || 0)}</strong></div><div><span>7 日贡献</span><strong>${formatTokens(item.contribution?.sevenDaysTokens || 0)}</strong></div></div><div class="device-quality">空间贡献 ${trim(number(item.contribution?.sharePercent))}% · 本地完整度 ${number(item.dataQuality?.score)}%</div>`
+    card.querySelector('.device-head > strong').textContent = item.device?.name || '未命名设备'
+    card.querySelector('.device-meta').textContent = `${platformLabel(item.device?.platform)} ${item.device?.arch || ''} · v${item.device?.appVersion || '--'} · ${formatTime(item.receivedAt)}`
+    card.querySelector('button').addEventListener('click', () => removeDevice(item.device.id, item.device.name))
+    return card
+  }) : [emptyRow('尚未同步任何设备')]))
 }
 
 async function removeDevice(deviceId, name) {
   if (!confirm(`从同步空间移除“${name}”？该设备下次同步时仍可重新加入。`)) return
-  const response = await fetch(`/api/usage?deviceId=${encodeURIComponent(deviceId)}`, {
-    method: 'DELETE',
-    headers: { authorization: `Bearer ${state.key}` }
-  })
-  if (!response.ok) {
-    alert('移除设备失败')
-    return
-  }
+  const response = await fetch(`/api/usage?deviceId=${encodeURIComponent(deviceId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${state.key}` } })
+  if (!response.ok) return alert('移除设备失败')
   await loadDashboard(false)
 }
 
-function metric(label, value) {
-  const wrapper = document.createElement('div')
-  const span = document.createElement('span')
-  span.textContent = label
-  const strong = document.createElement('strong')
-  strong.textContent = formatTokens(number(value))
-  wrapper.append(span, strong)
-  return wrapper
-}
-
 function disconnect() {
+  clearTimeout(state.emptyRetryTimer)
   localStorage.removeItem('codexmeter-sync-key')
   state.key = ''
   state.data = null
@@ -169,24 +266,81 @@ function setBusy(busy) {
   elements.pairingForm.querySelector('button.primary').disabled = busy
 }
 
+function projectRow(name, value, total, index) {
+  const row = document.createElement('div')
+  row.className = `project-row tone-${index % 5}`
+  const share = total ? number(value) / total * 100 : 0
+  row.innerHTML = `<div><span></span><strong>${formatTokens(value)} · ${trim(share)}%</strong></div><i><b style="width:${Math.max(share ? 2 : 0, share)}%"></b></i>`
+  row.querySelector('span').textContent = name || '未命名项目'
+  return row
+}
+
+function rankRow(label, value) {
+  const row = document.createElement('div')
+  row.className = 'rank-row'
+  const span = document.createElement('span')
+  const strong = document.createElement('strong')
+  span.textContent = label
+  strong.textContent = value
+  row.append(span, strong)
+  return row
+}
+
+function emptyRow(label) {
+  const row = document.createElement('div')
+  row.className = 'empty-row'
+  row.textContent = label
+  return row
+}
+
+function lastSevenDays(source) {
+  const byDate = new Map(source.map((day) => [day.date, day]))
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = shanghaiDateKey(new Date(Date.now() - (6 - index) * 86_400_000))
+    return byDate.get(date) || { date, events: 0, totalTokens: 0, total: {}, projects: [] }
+  })
+}
+
+function smoothPath(points) {
+  if (!points.length) return ''
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+  let path = `M ${points[0].x} ${points[0].y}`
+  for (let i = 1; i < points.length; i += 1) {
+    const previous = points[i - 1]
+    const current = points[i]
+    const middle = (previous.x + current.x) / 2
+    path += ` C ${middle} ${previous.y}, ${middle} ${current.y}, ${current.x} ${current.y}`
+  }
+  return path
+}
+
+function svg(tag, attributes) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag)
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value))
+  return node
+}
+
+function dayTokens(day) { return number(day?.total?.totalTokens ?? day?.totalTokens) }
 function number(value) { return Number.isFinite(Number(value)) ? Number(value) : 0 }
 function formatTokens(value) {
+  value = number(value)
   if (value >= 100_000_000) return `${trim(value / 100_000_000)}亿`
   if (value >= 1_000_000) return `${trim(value / 1_000_000)}百万`
   if (value >= 10_000) return `${trim(value / 10_000)}万`
   return Math.round(value).toLocaleString('zh-CN')
 }
-function trim(value) { return value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2).replace(/\.0+$|(?<=\.[0-9])0+$/, '') }
-function formatTime(value) {
+function formatUsd(value) { return `$${trim(number(value))}` }
+function formatChars(value) { return value >= 10_000 ? `${trim(value / 10_000)}万字` : `${Math.round(number(value))}字` }
+function trim(value) { return number(value).toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2).replace(/\.0+$|(?<=\.[0-9])0+$/, '') }
+function formatTime(value) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', { hour12: false }) : '--' }
+function shortDate(value) { const date = new Date(value); return Number.isFinite(date.getTime()) ? `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}` : '--' }
+function compactReset(value) {
   const date = new Date(value)
-  return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', { hour12: false }) : '--'
+  if (!Number.isFinite(date.getTime())) return '--'
+  const today = shanghaiDateKey(new Date())
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  return shanghaiDateKey(date) === today ? time : `${shortDate(value)} ${time}`
 }
-function platformLabel(value) {
-  if (value === 'darwin') return 'macOS'
-  if (value === 'win32') return 'Windows'
-  if (value === 'linux') return 'Linux'
-  return value || '未知系统'
-}
-function shanghaiDateKey(date) {
-  return new Date(date.getTime() + 8 * 60 * 60_000).toISOString().slice(0, 10)
-}
+function weekday(value) { const date = new Date(`${value}T00:00:00+08:00`); return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()] }
+function platformLabel(value) { return value === 'darwin' ? 'macOS' : value === 'win32' ? 'Windows' : value === 'linux' ? 'Linux' : value || '未知系统' }
+function shanghaiDateKey(date) { return new Date(date.getTime() + 8 * 60 * 60_000).toISOString().slice(0, 10) }

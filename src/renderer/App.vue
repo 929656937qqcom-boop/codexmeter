@@ -451,12 +451,12 @@ function openCloudDialog(): void {
 async function generateCloudKey(): Promise<void> {
   if (!window.codexMeter || cloudKeyGenerating.value) return
   cloudKeyGenerating.value = true
-  cloudStatusText.value = '正在生成同步密钥...'
+  cloudStatusText.value = '正在建立云端账号凭证...'
   try {
     cloudSyncKeyInput.value = (await window.codexMeter.generateCloudSyncKey()).syncKey
-    cloudStatusText.value = '已生成新密钥，请在其他设备或云端看板中使用同一密钥'
+    cloudStatusText.value = '已建立新的云端空间；其他设备请使用一次性配对码加入'
   } catch (error) {
-    cloudStatusText.value = error instanceof Error ? `生成失败：${error.message}` : '生成同步密钥失败'
+    cloudStatusText.value = error instanceof Error ? `生成失败：${error.message}` : '建立账号凭证失败'
   } finally {
     cloudKeyGenerating.value = false
   }
@@ -466,8 +466,8 @@ async function copyCloudKey(): Promise<void> {
   if (!cloudSyncKeyInput.value) return
   try {
     await navigator.clipboard.writeText(cloudSyncKeyInput.value)
-    cloudStatusText.value = '同步密钥已复制到剪贴板'
-    showNotice('同步密钥已复制')
+    cloudStatusText.value = '账号同步凭证已复制到剪贴板'
+    showNotice('账号同步凭证已复制')
   } catch {
     cloudStatusText.value = '复制失败，请选中密钥后按 Ctrl+C'
   }
@@ -506,8 +506,9 @@ async function saveCloudSyncSettings(): Promise<void> {
 async function openCloudDashboard(): Promise<void> {
   if (!window.codexMeter || cloudDashboardOpening.value) return
   cloudDashboardOpening.value = true
-  cloudStatusText.value = '正在打开网页看板...'
+  cloudStatusText.value = '正在获取一次性登录码（最多 12 秒）...'
   try {
+    await window.codexMeter.saveCloudSync(cloudEnabled.value, cloudEndpointInput.value, cloudSyncKeyInput.value || undefined)
     await window.codexMeter.openCloudDashboard()
     cloudStatusText.value = cloudSyncedAt.value ? `最近同步 ${compactDateTime(cloudSyncedAt.value)}` : '网页看板已打开'
   } catch (error) {
@@ -1332,7 +1333,7 @@ function compactDateTime(value: string): string {
           <div class="hardware-connect-head">
             <div>
               <strong>云端多设备汇总</strong>
-              <span>仅上传设备 ID 和 Token 汇总，不上传对话、项目路径、文件内容或 Codex OAuth</span>
+              <span>上传 Token 汇总与项目显示名，不上传对话、项目路径、文件内容或 Codex OAuth</span>
             </div>
             <button type="button" aria-label="关闭" @click="cloudDialogVisible = false">×</button>
           </div>
@@ -1343,7 +1344,7 @@ function compactDateTime(value: string): string {
               <NInput v-model:value="cloudEndpointInput" size="small" placeholder="https://.../api/usage" />
             </label>
             <label>
-              <span>同步密钥</span>
+              <span>账号同步凭证（本机加密保存）</span>
               <div class="cloud-key-field">
                 <KeyRound :size="14" :stroke-width="2" />
                 <NInput v-model:value="cloudSyncKeyInput" type="password" size="small" placeholder="cm_sync_..." />
@@ -1353,16 +1354,16 @@ function compactDateTime(value: string): string {
               </div>
             </label>
             <div class="cloud-key-actions">
-              <NButton size="small" ghost :loading="cloudKeyGenerating" @click="generateCloudKey">生成新密钥</NButton>
-              <NButton size="small" ghost :loading="cloudDashboardOpening" @click="openCloudDashboard">
+              <NButton size="small" ghost :loading="cloudKeyGenerating" @click="generateCloudKey">重新建立云端空间</NButton>
+              <NButton size="small" ghost :disabled="cloudDashboardOpening" @click="openCloudDashboard">
                 <template #icon><ExternalLink :size="14" /></template>
-                打开网页看板
+                {{ cloudDashboardOpening ? '正在连接（最多 12 秒）' : '自动登录网页看板' }}
               </NButton>
             </div>
             <div class="cloud-pair-panel">
               <div class="cloud-pair-copy">
-                <strong>多设备配对</strong>
-                <span>{{ cloudPairExpiresAt ? `有效至 ${compactDateTime(cloudPairExpiresAt)}` : '旧设备生成配对码，新设备输入后加入' }}</span>
+                <strong>连接新设备（一次性配对码）</strong>
+                <span>{{ cloudPairExpiresAt ? `配对码有效至 ${compactDateTime(cloudPairExpiresAt)}` : '已有设备生成，新设备输入；10 分钟后失效' }}</span>
               </div>
               <div class="cloud-pair-row">
                 <NInput v-model:value="cloudPairCode" size="small" maxlength="8" placeholder="8 位配对码" />
