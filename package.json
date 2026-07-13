@@ -1,6 +1,6 @@
 {
   "name": "codexmeter",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "description": "Cross-platform Codex quota and token monitor with secure multi-device aggregation.",
   "author": "929656937qqcom-boop",
   "license": "SEE LICENSE IN LICENSE",
@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "electron-store": "^10.1.0",
+    "electron-updater": "^6.8.9",
     "lucide-vue-next": "^0.577.0",
     "naive-ui": "^2.42.0",
     "vue": "^3.5.22"
@@ -61,6 +62,16 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "929656937qqcom-boop",
+        "repo": "codexmeter",
+        "channel": "beta"
+      }
+    ],
+    "generateUpdatesFilesForAllChannels": true,
+    "electronUpdaterCompatibility": ">=2.16",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -74,11 +85,26 @@
       "icon": "build/icon.ico",
       "signAndEditExecutable": false
     },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
     "mac": {
       "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",

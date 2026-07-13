@@ -3,6 +3,9 @@ import type { DisplayDevice } from '../shared/device.js'
 import type { QuotaSnapshot } from '../shared/quota.js'
 import type { AppSettings } from '../shared/settings.js'
 import type { CodexUsageSummary } from '../shared/usageAnalytics.js'
+import type { DiagnosticEventInput } from '../shared/diagnostics.js'
+import type { UpdateChannel } from '../shared/settings.js'
+import type { UpdateState } from '../shared/update.js'
 
 type CloudSyncState = {
   enabled: boolean
@@ -20,6 +23,8 @@ const api = {
   getSettings: () => ipcRenderer.invoke('settings:get') as Promise<AppSettings>,
   saveRefreshInterval: (minutes: number) =>
     ipcRenderer.invoke('settings:saveRefreshInterval', minutes) as Promise<AppSettings>,
+  saveDiagnosticsEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke('settings:saveDiagnostics', enabled) as Promise<AppSettings>,
   saveHardwareDisplay: (enabled: boolean, endpoint?: string) =>
     ipcRenderer.invoke('settings:saveHardwareDisplay', enabled, endpoint) as Promise<AppSettings>,
   getCloudSync: () => ipcRenderer.invoke('cloud:get') as Promise<CloudSyncState>,
@@ -30,6 +35,11 @@ const api = {
     ipcRenderer.invoke('cloud:save', enabled, endpoint, syncKey) as Promise<CloudSyncState>,
   syncCloudNow: () => ipcRenderer.invoke('cloud:syncNow') as Promise<{ synced: boolean; syncedAt?: string; error?: string }>,
   openCloudDashboard: () => ipcRenderer.invoke('cloud:openDashboard') as Promise<{ opened: boolean }>,
+  reportDiagnostic: (input: DiagnosticEventInput) => ipcRenderer.invoke('diagnostics:report', input) as Promise<boolean>,
+  getUpdateState: () => ipcRenderer.invoke('updates:get') as Promise<UpdateState>,
+  checkForUpdates: () => ipcRenderer.invoke('updates:check') as Promise<UpdateState>,
+  setUpdateChannel: (channel: UpdateChannel) => ipcRenderer.invoke('updates:setChannel', channel) as Promise<UpdateState>,
+  installUpdate: () => ipcRenderer.invoke('updates:install') as Promise<{ installing: boolean }>,
   listDevices: () => ipcRenderer.invoke('devices:list') as Promise<DisplayDevice[]>,
   pingHardwareDisplay: (endpoint: string) =>
     ipcRenderer.invoke('devices:ping', endpoint) as Promise<{ connected: boolean }>,
@@ -66,6 +76,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, pushedAt: string) => callback(pushedAt)
     ipcRenderer.on('hardware:pushUpdated', listener)
     return () => ipcRenderer.removeListener('hardware:pushUpdated', listener)
+  },
+  onUpdateState: (callback: (state: UpdateState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: UpdateState) => callback(state)
+    ipcRenderer.on('updates:state', listener)
+    return () => ipcRenderer.removeListener('updates:state', listener)
   }
 }
 

@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('codexMeter', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveRefreshInterval: (minutes) => ipcRenderer.invoke('settings:saveRefreshInterval', minutes),
   saveHardwareDisplay: (enabled, endpoint) => ipcRenderer.invoke('settings:saveHardwareDisplay', enabled, endpoint),
+  saveDiagnosticsEnabled: (enabled) => ipcRenderer.invoke('settings:saveDiagnostics', enabled),
+  reportDiagnostic: (event) => ipcRenderer.invoke('diagnostics:report', event),
+  getUpdateState: () => ipcRenderer.invoke('updates:get'),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  setUpdateChannel: (channel) => ipcRenderer.invoke('updates:setChannel', channel),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
   getCloudSync: () => ipcRenderer.invoke('cloud:get'),
   generateCloudSyncKey: () => ipcRenderer.invoke('cloud:generateKey'),
   createCloudPairingCode: () => ipcRenderer.invoke('cloud:createPairingCode'),
@@ -46,6 +52,11 @@ contextBridge.exposeInMainWorld('codexMeter', {
     const listener = (_event, pushedAt) => callback(pushedAt)
     ipcRenderer.on('hardware:pushUpdated', listener)
     return () => ipcRenderer.removeListener('hardware:pushUpdated', listener)
+  },
+  onUpdateState: (callback) => {
+    const listener = (_event, state) => callback(state)
+    ipcRenderer.on('updates:state', listener)
+    return () => ipcRenderer.removeListener('updates:state', listener)
   }
 })
 `.trimStart()

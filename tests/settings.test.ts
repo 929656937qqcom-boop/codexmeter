@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultSettings,
+  isUpdateChannel,
   isRefreshIntervalMinutes,
   normalizeCloudEndpoint,
   normalizeHardwareEndpoint
@@ -13,6 +14,14 @@ describe('isRefreshIntervalMinutes', () => {
 
   it('enables hardware auto sync by default', () => {
     expect(defaultSettings.hardwareDisplayEnabled).toBe(true)
+  })
+
+  it('keeps public updates stable and diagnostics opt-in by default', () => {
+    expect(defaultSettings.updateChannel).toBe('latest')
+    expect(defaultSettings.diagnosticsEnabled).toBe(false)
+    expect(isUpdateChannel('latest')).toBe(true)
+    expect(isUpdateChannel('beta')).toBe(true)
+    expect(isUpdateChannel('alpha')).toBe(false)
   })
 
   it.each([0, 5, 10])('accepts %s minutes', (minutes) => {

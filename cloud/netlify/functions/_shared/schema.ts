@@ -195,6 +195,7 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
   }
   const localTotal = [...deviceTotals.values()].reduce((sum, value) => sum + value, 0)
   const fingerprints = new Set(devices.map((item) => item.accountFingerprint).filter(Boolean))
+  const quota = selectAccountQuota(devices)
 
   return {
     deviceCount: devices.length,
@@ -206,7 +207,7 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
     projects: aggregateProjects(devices),
     tools: aggregateTools(devices),
     skills: aggregateSkills(devices),
-    quota: [...devices].reverse().find((item) => item.quota)?.quota,
+    quota,
     deduplication: { uniqueEvents: seenEvents.size, duplicateEvents },
     devices: [...devices].reverse().map((item) => {
       const total = deviceTotals.get(item.device.id) ?? 0
@@ -225,6 +226,15 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
       }
     })
   }
+}
+
+function selectAccountQuota(devices: StoredDeviceUsage[]): StoredQuota | undefined {
+  const quotas = devices
+    .map((item) => item.quota)
+    .filter((quota): quota is StoredQuota => Boolean(quota))
+    .sort((a, b) => Date.parse(a.refreshedAt) - Date.parse(b.refreshedAt))
+  const available = quotas.filter((quota) => quota.available && quota.windows.length > 0)
+  return available.at(-1) ?? quotas.at(-1)
 }
 
 function addDaily(daily: Map<string, AggregateDay>, source: DailyUsage, deviceId: string): void {

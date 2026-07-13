@@ -10,6 +10,7 @@ import {
   Cloud,
   Copy,
   ExternalLink,
+  Info,
   KeyRound,
   Link2,
   Minus,
@@ -23,7 +24,8 @@ import {
 import appIcon from './assets/icon.png'
 import { buildBleUsagePayload } from '../shared/device'
 import { sampleQuotaSnapshot, type QuotaSnapshot, type QuotaWindow, type ResetCard } from '../shared/quota'
-import type { AppSettings, RefreshIntervalMinutes } from '../shared/settings'
+import type { AppSettings, RefreshIntervalMinutes, UpdateChannel } from '../shared/settings'
+import type { UpdateState } from '../shared/update'
 import type {
   CodexUsageSummary,
   UsageDailyProjectSummary,
@@ -86,11 +88,15 @@ const connecting = ref(false)
 const noticeVisible = ref(false)
 const noticeText = ref('')
 const aboutVisible = ref(false)
+const diagnosticsEnabled = ref(false)
+const updateState = ref<UpdateState>({ currentVersion: '0.1.0', channel: 'latest', status: 'idle' })
 let unsubscribeQuota: (() => void) | undefined
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 let removeCopyListener: (() => void) | undefined
 let unsubscribeHardwarePush: (() => void) | undefined
+let unsubscribeUpdateState: (() => void) | undefined
+let removeDiagnosticListeners: (() => void) | undefined
 
 const intervalOptions = [
   { label: '手动刷新', value: 0 },
@@ -112,6 +118,17 @@ const themeOverrides: GlobalThemeOverrides = {
 const fiveHourWindow = computed(() => findWindow('5h'))
 const sevenDayWindow = computed(() => findWindow('7d'))
 const resetCards = computed<ResetCard[]>(() => snapshot.value?.resetCards ?? [])
+const updateBusy = computed(() => updateState.value.status === 'checking' || updateState.value.status === 'downloading')
+const updateStatusText = computed(() => {
+  if (updateState.value.status === 'checking') return '正在检查更新（最多 15 秒）'
+  if (updateState.value.status === 'available') return `发现 v${updateState.value.availableVersion}，准备下载`
+  if (updateState.value.status === 'downloading') return `正在下载 ${updateState.value.progressPercent ?? 0}%`
+  if (updateState.value.status === 'downloaded') return `v${updateState.value.availableVersion} 已下载，等待安装`
+  if (updateState.value.status === 'up-to-date') return '当前已是最新版本'
+  if (updateState.value.status === 'error') return updateState.value.error ?? '检查更新失败'
+  if (updateState.value.status === 'unsupported') return '开发模式不检查更新'
+  return updateState.value.channel === 'beta' ? '内部灰度通道' : '正式公开通道'
+})
 const codexPlanLabel = computed(() => {
   const planType = formattedPlanType.value
   if (!planType) {
@@ -318,6 +335,30 @@ onMounted(async () => {
   document.addEventListener('copy', handleCopy)
   removeCopyListener = () => document.removeEventListener('copy', handleCopy)
 
+  const handleRendererError = (event: ErrorEvent) => {
+    void window.codexMeter?.reportDiagnostic({
+      kind: 'renderer-error',
+      message: event.message || 'Renderer error',
+      stack: event.error instanceof Error ? event.error.stack : undefined,
+      operation: 'window-error'
+    })
+  }
+  const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+    const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason))
+    void window.codexMeter?.reportDiagnostic({
+      kind: 'renderer-error',
+      message: error.message,
+      stack: error.stack,
+      operation: 'unhandled-rejection'
+    })
+  }
+  window.addEventListener('error', handleRendererError)
+  window.addEventListener('unhandledrejection', handleUnhandledRejection)
+  removeDiagnosticListeners = () => {
+    window.removeEventListener('error', handleRendererError)
+    window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+  }
+
   unsubscribeQuota = window.codexMeter?.onQuotaUpdated((nextSnapshot) => {
     snapshot.value = nextSnapshot
     status.value = `已刷新 ${new Date(nextSnapshot.refreshedAt).toLocaleTimeString()}`
@@ -337,6 +378,7 @@ onMounted(async () => {
 
   if (window.codexMeter) {
     settings.value = await window.codexMeter.getSettings()
+    diagnosticsEnabled.value = settings.value.diagnosticsEnabled
     hardwareEndpointInput.value = settings.value.hardwareEndpoint ?? ''
     hardwareAutoSync.value = settings.value.hardwareDisplayEnabled
     hardwareConnectionState.value = settings.value.hardwareEndpoint ? '已连接' : '未连接'
@@ -352,12 +394,18 @@ onMounted(async () => {
     cloudSyncKeyInput.value = cloud.syncKey ?? ''
     cloudSyncedAt.value = cloud.syncedAt
     cloudStatusText.value = cloud.error ?? (cloud.syncedAt ? `最近同步 ${compactDateTime(cloud.syncedAt)}` : cloud.enabled ? '等待首次同步' : '尚未开启')
+    updateState.value = await window.codexMeter.getUpdateState()
+    unsubscribeUpdateState = window.codexMeter.onUpdateState((state) => {
+      updateState.value = state
+    })
   } else {
     settings.value = {
       refreshIntervalMinutes: 5,
       hardwareDisplayEnabled: true,
       cloudSyncEnabled: false,
-      cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+      cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage',
+      updateChannel: 'latest',
+      diagnosticsEnabled: false
     }
     hardwareAutoSync.value = true
   }
@@ -370,7 +418,9 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubscribeQuota?.()
   unsubscribeHardwarePush?.()
+  unsubscribeUpdateState?.()
   removeCopyListener?.()
+  removeDiagnosticListeners?.()
   clearAutoRefresh()
   clearNotice()
 })
@@ -391,6 +441,7 @@ async function refreshQuota(): Promise<void> {
 }
 
 async function refreshDashboardData(): Promise<void> {
+  if (loading.value || usageLoading.value) return
   await refreshQuota()
   await refreshUsageSummary()
 }
@@ -423,6 +474,29 @@ function clearNotice(): void {
 
 function showAbout(): void {
   aboutVisible.value = true
+}
+
+async function setUpdateChannel(channel: UpdateChannel): Promise<void> {
+  if (!window.codexMeter || updateState.value.channel === channel) return
+  updateState.value = await window.codexMeter.setUpdateChannel(channel)
+  settings.value = settings.value ? { ...settings.value, updateChannel: channel } : settings.value
+}
+
+async function checkAppUpdate(): Promise<void> {
+  if (!window.codexMeter || updateBusy.value) return
+  updateState.value = await window.codexMeter.checkForUpdates()
+}
+
+async function installAppUpdate(): Promise<void> {
+  if (!window.codexMeter) return
+  await window.codexMeter.installUpdate()
+}
+
+async function saveDiagnosticsEnabled(enabled: boolean): Promise<void> {
+  diagnosticsEnabled.value = enabled
+  if (!window.codexMeter) return
+  settings.value = await window.codexMeter.saveDiagnosticsEnabled(enabled)
+  showNotice(enabled ? '匿名错误诊断已开启' : '匿名错误诊断已关闭')
 }
 
 function openHardwareDialog(): void {
@@ -557,7 +631,9 @@ async function updateInterval(value: number): Promise<void> {
         refreshIntervalMinutes: value as RefreshIntervalMinutes,
         hardwareDisplayEnabled: true,
         cloudSyncEnabled: false,
-        cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+        cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage',
+        updateChannel: settings.value?.updateChannel ?? 'latest',
+        diagnosticsEnabled: settings.value?.diagnosticsEnabled ?? false
       }
   configureAutoRefresh(settings.value.refreshIntervalMinutes)
 }
@@ -572,7 +648,9 @@ async function saveHardwareDisplay(enabled = true): Promise<void> {
           hardwareDisplayEnabled: Boolean(enabled && hardwareEndpointInput.value),
           hardwareEndpoint: hardwareEndpointInput.value,
           cloudSyncEnabled: settings.value?.cloudSyncEnabled ?? false,
-          cloudEndpoint: settings.value?.cloudEndpoint ?? 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+          cloudEndpoint: settings.value?.cloudEndpoint ?? 'https://codexmeter-cloud-929656937.netlify.app/api/usage',
+          updateChannel: settings.value?.updateChannel ?? 'latest',
+          diagnosticsEnabled: settings.value?.diagnosticsEnabled ?? false
         }
     hardwareEndpointInput.value = settings.value.hardwareEndpoint ?? hardwareEndpointInput.value.trim()
     hardwareAutoSync.value = settings.value.hardwareDisplayEnabled
@@ -723,7 +801,7 @@ function configureAutoRefresh(minutes: RefreshIntervalMinutes): void {
   }
 
   refreshTimer = setInterval(() => {
-    void refreshQuota()
+    void refreshDashboardData()
   }, minutes * 60 * 1000)
 }
 
@@ -1233,12 +1311,24 @@ function compactDateTime(value: string): string {
 
     <Transition name="notice">
       <div v-if="aboutVisible" class="about-popover">
-        <div>
+        <div class="about-head">
           <strong>CodexMeter</strong>
-          <span>版本 v1.0.0</span>
+          <span>v{{ updateState.currentVersion }}</span>
         </div>
-        <p>本地运行 · 不联网自动更新 · 仅读取授权后的用量数据</p>
-        <button type="button" @click="aboutVisible = false">知道了</button>
+        <p>{{ updateStatusText }}</p>
+        <div class="about-channel" aria-label="更新通道">
+          <button type="button" :class="{ active: updateState.channel === 'latest' }" @click="setUpdateChannel('latest')">正式版</button>
+          <button type="button" :class="{ active: updateState.channel === 'beta' }" @click="setUpdateChannel('beta')">内部灰度</button>
+        </div>
+        <label class="about-diagnostics">
+          <span><strong>匿名错误诊断</strong><small>仅上传脱敏错误、版本和系统信息</small></span>
+          <NSwitch :value="diagnosticsEnabled" size="small" @update:value="saveDiagnosticsEnabled" />
+        </label>
+        <div class="about-actions">
+          <button type="button" :disabled="updateBusy" @click="checkAppUpdate">{{ updateBusy ? '处理中…' : '检查更新' }}</button>
+          <button v-if="updateState.status === 'downloaded'" type="button" class="primary" @click="installAppUpdate">重启安装</button>
+          <button type="button" @click="aboutVisible = false">关闭</button>
+        </div>
       </div>
     </Transition>
 
@@ -1383,6 +1473,11 @@ function compactDateTime(value: string): string {
               <Cloud :size="16" :stroke-width="2" />
               <span>{{ cloudStatusText }}</span>
             </div>
+            <div class="hardware-sync-row diagnostics-sync-row">
+              <div><strong>匿名错误诊断</strong><span>上传脱敏错误类型、版本和系统信息，不上传对话与路径</span></div>
+              <b>[{{ diagnosticsEnabled ? '开启' : '关闭' }}]</b>
+              <NSwitch :value="diagnosticsEnabled" size="small" @update:value="saveDiagnosticsEnabled" />
+            </div>
           </div>
 
           <div class="hardware-connect-actions">
@@ -1442,6 +1537,9 @@ function compactDateTime(value: string): string {
               <RefreshCw :size="18" :stroke-width="2.2" />
             </button>
             <div class="window-control-strip" aria-label="窗口控制">
+              <button class="window-control-button is-about" type="button" aria-label="关于与更新" title="关于与更新" @click="showAbout">
+                <Info :size="15" :stroke-width="2.2" />
+              </button>
               <button class="window-control-button" type="button" aria-label="缩小" title="缩小" @click="minimizeMainWindow">
                 <Minus :size="15" :stroke-width="2.4" />
               </button>

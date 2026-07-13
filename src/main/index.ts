@@ -4,16 +4,20 @@ import { fileURLToPath } from 'node:url'
 import { NoopDeviceBridge } from './deviceBridge.js'
 import { cancelCodexOAuth, startCodexOAuth } from './oauth.js'
 import { fetchQuotaSnapshot } from './quotaProvider.js'
-import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, saveCloudSyncKey, saveSettings } from './store.js'
+import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, hasStoredUpdateChannel, saveCloudSyncKey, saveSettings } from './store.js'
 import { readCodexUsageSummary } from './usageProvider.js'
 import { fetchOfficialAccountUsage } from './accountUsageProvider.js'
 import { recordOfficialUsageSnapshot } from './accountUsageHistory.js'
 import { getOrCreateDeviceProfile } from './deviceIdentity.js'
 import { createCloudSyncKey, createPairingCode, redeemPairingCode, syncDeviceUsage, type CloudSyncResult } from './cloudSync.js'
+import { initializeMainDiagnostics, monitorRendererDiagnostics, reportDiagnostic } from './diagnostics.js'
+import { changeUpdateChannel, checkForUpdates, getUpdateState, initializeUpdater, installDownloadedUpdate } from './updater.js'
 import { HttpDeviceBridge, type DeviceBridge } from '../shared/device.js'
 import { unavailableQuotaSnapshot, type QuotaSnapshot } from '../shared/quota.js'
-import { isRefreshIntervalMinutes, normalizeCloudEndpoint, normalizeHardwareEndpoint } from '../shared/settings.js'
-import { attachDeviceProfile, attachOfficialUsage } from '../shared/usageAnalytics.js'
+import { isRefreshIntervalMinutes, isUpdateChannel, normalizeCloudEndpoint, normalizeHardwareEndpoint } from '../shared/settings.js'
+import { attachDeviceProfile, attachOfficialUsage, type CodexUsageSummary } from '../shared/usageAnalytics.js'
+import type { DiagnosticEventInput } from '../shared/diagnostics.js'
+import type { UpdateState } from '../shared/update.js'
 
 const devServerUrl = process.env.CODEXMETER_DEV_SERVER_URL
 const __filename = fileURLToPath(import.meta.url)
@@ -33,6 +37,8 @@ let widgetAlwaysOnTop = false
 let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
 let latestCloudSync: CloudSyncResult = { synced: false }
+
+initializeMainDiagnostics()
 
 function hardwareConnectionError(): Error {
   return new Error('无法连接外部小屏，请确认 ESP32-C3 已连接 Wi-Fi，且电脑与设备在同一局域网。')
@@ -73,6 +79,7 @@ async function createWindow(): Promise<void> {
     }
   })
   Menu.setApplicationMenu(null)
+  monitorRendererDiagnostics(mainWindow)
   mainWindow.webContents.on('select-bluetooth-device', (event, devices, callback) => {
     event.preventDefault()
     if (bluetoothSelectTimer) {
@@ -143,6 +150,7 @@ async function createWidgetWindow(): Promise<BrowserWindow> {
       sandbox: false
     }
   })
+  monitorRendererDiagnostics(widgetWindow)
 
   widgetWindow.on('closed', () => {
     widgetWindow = null
@@ -266,13 +274,22 @@ async function buildUsageSummary() {
   return attachOfficialUsage(localSummary, officialUsage)
 }
 
+async function syncCloudUsage(summary?: CodexUsageSummary): Promise<CloudSyncResult> {
+  const settings = getSettings()
+  if (!settings.cloudSyncEnabled || !getCloudSyncKey()) return { synced: false, error: '云端同步尚未开启' }
+  const currentSummary = summary ?? await buildUsageSummary()
+  latestCloudSync = await syncDeviceUsage(settings.cloudEndpoint, currentSummary, latestSnapshot ?? undefined)
+  if (!latestCloudSync.synced && latestCloudSync.error) {
+    void reportDiagnostic({ kind: 'cloud-sync-error', message: latestCloudSync.error, operation: 'sync-device-usage' })
+  }
+  return latestCloudSync
+}
+
 ipcMain.handle('usage:summary', async () => {
   const summary = await buildUsageSummary()
   const settings = getSettings()
   if (settings.cloudSyncEnabled && getCloudSyncKey()) {
-    void syncDeviceUsage(settings.cloudEndpoint, summary, latestSnapshot ?? undefined).then((result) => {
-      latestCloudSync = result
-    })
+    void syncCloudUsage(summary)
   }
   return summary
 })
@@ -297,6 +314,11 @@ ipcMain.handle('settings:saveRefreshInterval', (_event, minutes: number) => {
     refreshIntervalMinutes: minutes
   })
 })
+
+ipcMain.handle('settings:saveDiagnostics', (_event, enabled: boolean) => saveSettings({
+  ...getSettings(),
+  diagnosticsEnabled: Boolean(enabled)
+}))
 
 ipcMain.handle('settings:saveHardwareDisplay', (_event, enabled: boolean, endpoint?: string) => {
   const hardwareEndpoint = normalizeHardwareEndpoint(endpoint)
@@ -338,10 +360,7 @@ ipcMain.handle('cloud:save', (_event, enabled: boolean, endpoint: string, syncKe
 })
 
 ipcMain.handle('cloud:syncNow', async () => {
-  const settings = getSettings()
-  if (!settings.cloudSyncEnabled) return { synced: false, error: '云端同步尚未开启' }
-  latestCloudSync = await syncDeviceUsage(settings.cloudEndpoint, await buildUsageSummary(), latestSnapshot ?? undefined)
-  return latestCloudSync
+  return syncCloudUsage()
 })
 
 ipcMain.handle('cloud:openDashboard', async () => {
@@ -354,8 +373,7 @@ ipcMain.handle('cloud:openDashboard', async () => {
   dashboard.hash = ''
   await shell.openExternal(dashboard.toString())
   void buildUsageSummary()
-    .then((summary) => syncDeviceUsage(settings.cloudEndpoint, summary, latestSnapshot ?? undefined))
-    .then((result) => { latestCloudSync = result })
+    .then((summary) => syncCloudUsage(summary))
     .catch((error) => {
       latestCloudSync = { synced: false, error: error instanceof Error ? error.message : '后台同步失败' }
     })
@@ -443,11 +461,34 @@ ipcMain.handle('widget:setAlwaysOnTop', (_event, enabled: boolean) => {
 
 ipcMain.handle('widget:openMainWindow', async () => showMainWindow())
 
+ipcMain.handle('diagnostics:report', (_event, input: DiagnosticEventInput) => reportDiagnostic(input))
+
+ipcMain.handle('updates:get', () => getUpdateState())
+ipcMain.handle('updates:check', () => checkForUpdates())
+ipcMain.handle('updates:setChannel', (_event, channel: unknown) => {
+  if (!isUpdateChannel(channel)) throw new Error('不支持的更新通道')
+  saveSettings({ ...getSettings(), updateChannel: channel })
+  return changeUpdateChannel(channel)
+})
+ipcMain.handle('updates:install', () => {
+  isQuitting = true
+  return { installing: installDownloadedUpdate() }
+})
+
+function broadcastUpdateState(state: UpdateState): void {
+  mainWindow?.webContents.send('updates:state', state)
+  widgetWindow?.webContents.send('updates:state', state)
+}
+
 app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.setIcon(nativeImage.createFromPath(appIconPath))
+  if (!hasStoredUpdateChannel() && app.getVersion().includes('-beta')) {
+    saveSettings({ ...getSettings(), updateChannel: 'beta' })
+  }
   configureBluetoothPermissions()
   await createWindow()
   createTray()
+  initializeUpdater(getSettings().updateChannel, broadcastUpdateState)
 })
 
 app.on('activate', () => {

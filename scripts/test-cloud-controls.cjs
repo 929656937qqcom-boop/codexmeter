@@ -6,7 +6,17 @@ const root = path.resolve(__dirname, '..')
 const endpoint = 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
 const originalKey = `cm_sync_${'a'.repeat(43)}`
 const generatedKey = `cm_sync_${'b'.repeat(43)}`
-const calls = { generate: 0, pairCreate: 0, pairRedeem: 0, open: 0, save: 0, sync: 0 }
+const calls = {
+  generate: 0,
+  pairCreate: 0,
+  pairRedeem: 0,
+  open: 0,
+  save: 0,
+  sync: 0,
+  diagnostics: 0,
+  updateCheck: 0,
+  updateChannel: 0
+}
 
 app.setPath('userData', path.join(os.tmpdir(), 'codexmeter-cloud-control-test'))
 
@@ -15,7 +25,9 @@ function registerHandlers() {
     refreshIntervalMinutes: 5,
     hardwareDisplayEnabled: true,
     cloudSyncEnabled: false,
-    cloudEndpoint: endpoint
+    cloudEndpoint: endpoint,
+    updateChannel: 'beta',
+    diagnosticsEnabled: false
   }
   const quota = { available: false, refreshedAt: new Date().toISOString(), windows: [], source: 'unavailable' }
   ipcMain.handle('settings:get', () => settings)
@@ -49,6 +61,23 @@ function registerHandlers() {
     calls.sync += 1
     return { synced: true, syncedAt: new Date().toISOString() }
   })
+  ipcMain.handle('settings:saveDiagnostics', (_event, enabled) => {
+    calls.diagnostics += 1
+    settings.diagnosticsEnabled = enabled
+    return settings
+  })
+  ipcMain.handle('diagnostics:report', () => ({ accepted: true }))
+  ipcMain.handle('updates:get', () => ({ currentVersion: '0.2.0-beta.1', channel: settings.updateChannel, status: 'idle' }))
+  ipcMain.handle('updates:check', () => {
+    calls.updateCheck += 1
+    return { currentVersion: '0.2.0-beta.1', channel: settings.updateChannel, status: 'up-to-date' }
+  })
+  ipcMain.handle('updates:setChannel', (_event, channel) => {
+    calls.updateChannel += 1
+    settings.updateChannel = channel
+    return { currentVersion: '0.2.0-beta.1', channel, status: 'idle' }
+  })
+  ipcMain.handle('updates:install', () => ({ installing: true }))
 }
 
 const wait = (milliseconds = 320) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -154,6 +183,21 @@ app.whenReady().then(async () => {
     await wait(250)
     check(calls.save === savesBeforeManual + 1 && calls.sync === syncsBeforeManual + 1, '保存并同步可点击且调用同步')
     check(!(await value(window, `Boolean(document.querySelector('.cloud-sync-popover'))`)), '保存成功后关闭弹窗')
+    await click(window, `document.querySelector('.window-control-button.is-about')`, 'about and updates')
+    check(await value(window, `Boolean(document.querySelector('.about-popover'))`), 'about opens')
+    check(await value(window, `document.querySelector('.about-head span').textContent.includes('0.2.0-beta.1')`), 'version is visible')
+
+    await click(window, `document.querySelectorAll('.about-channel button')[0]`, 'stable channel')
+    check(calls.updateChannel === 1, 'update channel is clickable')
+
+    await click(window, `document.querySelector('.about-diagnostics .n-switch')`, 'diagnostics opt in')
+    check(calls.diagnostics === 1, 'diagnostics switch is clickable')
+
+    await click(window, `document.querySelector('.about-actions button')`, 'check update')
+    check(calls.updateCheck === 1, 'update check is clickable')
+
+    await click(window, `document.querySelector('.about-actions button:last-child')`, 'close about')
+    check(!(await value(window, `Boolean(document.querySelector('.about-popover'))`)), 'about closes')
   } finally {
     clipboard.writeText(clipboardBefore)
     window.destroy()

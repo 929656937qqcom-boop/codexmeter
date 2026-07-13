@@ -112,4 +112,41 @@ describe('cloud usage schema', () => {
     expect(result.tools[0]).toMatchObject({ name: 'shell_command', calls: 3 })
     expect(result.quota).toMatchObject({ available: true, windows: [{ code: '5h', percentUsed: 25 }] })
   })
+
+  it('does not let a newer unavailable device snapshot hide valid account quota', () => {
+    const validPayload = {
+      ...envelope('device_0001', 'Windows', 100),
+      schemaVersion: 3,
+      quota: {
+        available: true,
+        refreshedAt: '2026-07-12T08:00:00.000Z',
+        source: 'codex',
+        windows: [
+          { code: '5h', percentUsed: 35, resetAt: '2026-07-12T10:00:00.000Z' },
+          { code: '7d', percentUsed: 70, resetAt: '2026-07-18T00:00:00.000Z' }
+        ],
+        resetCards: [{ expiresAt: '2026-08-01T00:00:00.000Z' }]
+      }
+    }
+    const unavailablePayload = {
+      ...envelope('device_0002', 'Laptop', 200),
+      schemaVersion: 3,
+      quota: {
+        available: false,
+        refreshedAt: '2026-07-12T09:00:00.000Z',
+        source: 'unavailable',
+        windows: [],
+        resetCards: []
+      }
+    }
+    const valid = parseDeviceUsage(validPayload, '2026-07-12T08:01:00.000Z')
+    const unavailable = parseDeviceUsage(unavailablePayload, '2026-07-12T09:01:00.000Z')
+    const result = aggregateDevices([valid!, unavailable!])
+
+    expect(result.quota).toMatchObject({
+      available: true,
+      windows: [{ code: '5h', percentUsed: 35 }, { code: '7d', percentUsed: 70 }],
+      resetCards: [{ expiresAt: '2026-08-01T00:00:00.000Z' }]
+    })
+  })
 })

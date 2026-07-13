@@ -12,7 +12,7 @@ button, input { font: inherit; }
 button { cursor: pointer; }
 
 .app-shell { width: min(1260px, calc(100% - 36px)); margin: 0 auto; padding: 18px 0 42px; }
-.topbar, .quota-card, .period-card, .token-split, .insight-panel, .rank-panel, .devices-panel, .empty-notice { border: 1px solid rgba(74, 222, 246, .2); background: rgba(8, 23, 39, .96); }
+.topbar, .quota-card, .period-card, .token-split, .insight-panel, .rank-panel, .devices-panel, .health-panel, .empty-notice { border: 1px solid rgba(74, 222, 246, .2); background: rgba(8, 23, 39, .96); }
 .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 74px; padding: 0 18px; border-radius: 8px; background-image: linear-gradient(110deg, rgba(8, 23, 39, .98), rgba(8, 42, 47, .92)); }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand img { width: 46px; height: 46px; border-radius: 8px; }
@@ -85,7 +85,7 @@ button.primary { color: #04131d; background: #67e8f9; font-weight: 850; }
 .token-split > div:nth-child(2) b { background: #2dd4bf; }
 .token-split > div:nth-child(3) b { background: #f59e0b; }
 
-.insight-panel, .rank-panel, .devices-panel { padding: 15px; border-radius: 8px; }
+.insight-panel, .rank-panel, .devices-panel, .health-panel { padding: 15px; border-radius: 8px; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .panel-header h2 { font-size: 15px; }
 .panel-header p { margin: 4px 0 0; color: #7f97aa; font-size: 10px; }
@@ -145,6 +145,15 @@ button.primary { color: #04131d; background: #67e8f9; font-weight: 850; }
 .device-metrics strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .device-quality { margin-top: 10px; color: #67e8f9; font-size: 9px; font-weight: 800; }
 .empty-row { grid-column: 1 / -1; padding: 16px 10px; color: #698095; font-size: 11px; text-align: center; }
+
+.health-panel > header > strong { color: #4ade80; font-size: 11px; }
+.health-panel > header > strong.warning { color: #facc15; }
+.diagnostic-list { display: grid; gap: 7px; margin-top: 12px; }
+.diagnostic-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 9px 11px; border: 1px solid rgba(103, 232, 249, .1); border-radius: 6px; background: #0b1b2c; }
+.diagnostic-row > div { display: grid; gap: 3px; min-width: 0; }
+.diagnostic-row strong { color: #d9f6ff; font-size: 11px; }
+.diagnostic-row span { overflow: hidden; color: #8198aa; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-row time { flex: 0 0 auto; color: #67e8f9; font-size: 9px; }
 
 @media (max-width: 850px) {
   .pairing-view { grid-template-columns: 1fr; gap: 20px; padding: 42px 8px; }

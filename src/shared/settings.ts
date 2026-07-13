@@ -1,4 +1,5 @@
 export type RefreshIntervalMinutes = 0 | 5 | 10
+export type UpdateChannel = 'latest' | 'beta'
 
 export interface AppSettings {
   refreshIntervalMinutes: RefreshIntervalMinutes
@@ -6,13 +7,21 @@ export interface AppSettings {
   hardwareEndpoint?: string
   cloudSyncEnabled: boolean
   cloudEndpoint: string
+  updateChannel: UpdateChannel
+  diagnosticsEnabled: boolean
 }
 
 export const defaultSettings: AppSettings = {
   refreshIntervalMinutes: 5,
   hardwareDisplayEnabled: true,
   cloudSyncEnabled: false,
-  cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage'
+  cloudEndpoint: 'https://codexmeter-cloud-929656937.netlify.app/api/usage',
+  updateChannel: 'latest',
+  diagnosticsEnabled: false
+}
+
+export function isUpdateChannel(value: unknown): value is UpdateChannel {
+  return value === 'latest' || value === 'beta'
 }
 
 export function normalizeCloudEndpoint(input: string | undefined): string {

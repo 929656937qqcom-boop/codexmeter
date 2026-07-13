@@ -4,7 +4,9 @@ const state = {
   activePeriod: 'today',
   selectedDate: '',
   emptyRetries: 0,
-  emptyRetryTimer: 0
+  emptyRetryTimer: 0,
+  dashboardRefreshTimer: 0,
+  diagnostics: { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
 }
 
 const ids = [
@@ -15,7 +17,8 @@ const ids = [
   'monthTokens', 'monthValue', 'monthEvents', 'inputTokens', 'cachedTokens', 'outputTokens', 'inputBar', 'cachedBar',
   'outputBar', 'selectedDaySummary', 'deviceCount', 'officialTokens', 'coveragePercent', 'peakValue', 'trendSvg', 'trendGrid',
   'trendAreaPath', 'trendLinePath', 'trendPoints', 'trendDays', 'projectDayLabel', 'projectDayTotal', 'projectDayEvents',
-  'dayProjectList', 'projectRankList', 'toolRankList', 'syncMeta', 'dedupState', 'deviceList'
+  'dayProjectList', 'projectRankList', 'toolRankList', 'syncMeta', 'dedupState', 'deviceList',
+  'healthState', 'healthSummary', 'diagnosticList'
 ]
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]))
 
@@ -56,28 +59,40 @@ async function redeemWebPair(code) {
   }
 }
 
-async function loadDashboard(persist) {
-  setBusy(true)
+async function loadDashboard(persist, silent = false) {
+  if (!silent) setBusy(true)
   elements.pairingError.textContent = ''
   try {
     if (!/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw new Error('同步凭证格式不正确')
-    const response = await fetch('/api/usage', { headers: { authorization: `Bearer ${state.key}` } })
+    const headers = { authorization: `Bearer ${state.key}` }
+    const [response, diagnosticResponse] = await Promise.all([
+      fetch('/api/usage', { headers }),
+      fetch('/api/diagnostics', { headers })
+    ])
     if (!response.ok) throw new Error(response.status === 401 ? '同步凭证无效' : '云端数据读取失败')
     state.data = await response.json()
+    state.diagnostics = diagnosticResponse.ok
+      ? await diagnosticResponse.json()
+      : { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
     if (persist) localStorage.setItem('codexmeter-sync-key', state.key)
     renderDashboard()
     elements.pairingView.hidden = true
     elements.dashboardView.hidden = false
     elements.refreshButton.hidden = false
     elements.disconnectButton.hidden = false
-    elements.connectionState.textContent = state.data.deviceCount ? '已同步' : '已连接 · 待同步'
+    elements.connectionState.textContent = state.data.deviceCount ? '已同步 · 60 秒刷新' : '已连接 · 待同步'
     elements.connectionState.classList.add('connected')
+    scheduleDashboardRefresh()
   } catch (error) {
+    if (silent && state.data) {
+      elements.connectionState.textContent = '刷新失败 · 保留上次数据'
+      return
+    }
     elements.pairingView.hidden = false
     elements.dashboardView.hidden = true
     elements.pairingError.textContent = error instanceof Error ? error.message : '连接失败'
   } finally {
-    setBusy(false)
+    if (!silent) setBusy(false)
   }
 }
 
@@ -100,6 +115,7 @@ function renderDashboard() {
   renderSelectedDay(daily)
   renderRanks(data)
   renderDevices(devices)
+  renderDiagnostics()
 
   const todayKey = shanghaiDateKey(new Date())
   const today = daily.find((day) => day.date === todayKey)
@@ -107,7 +123,12 @@ function renderDashboard() {
   elements.officialTokens.textContent = `官方 ${official ? formatTokens(official.tokens) : '--'}`
   elements.coveragePercent.textContent = `覆盖率 ${official?.tokens ? `${trim(number(today?.total?.totalTokens ?? today?.totalTokens) / official.tokens * 100)}%` : '--'}`
   elements.dedupState.textContent = `去重 ${number(data.deduplication?.duplicateEvents)} 条 · ${data.accountVerified ? '账号已校验' : '待账号校验'}`
-  elements.syncMeta.textContent = data.updatedAt ? `最近同步 ${formatTime(data.updatedAt)}` : '尚未收到设备数据'
+  elements.syncMeta.textContent = data.updatedAt ? `数据截至 ${formatTime(data.updatedAt)} · 网页每 60 秒刷新` : '尚未收到设备数据'
+}
+
+function scheduleDashboardRefresh() {
+  clearInterval(state.dashboardRefreshTimer)
+  state.dashboardRefreshTimer = setInterval(() => loadDashboard(false, true), 60_000)
 }
 
 function scheduleEmptyRetry(deviceCount) {
@@ -119,8 +140,41 @@ function scheduleEmptyRetry(deviceCount) {
   if (state.emptyRetries >= 5) return
   state.emptyRetryTimer = setTimeout(() => {
     state.emptyRetries += 1
-    loadDashboard(false)
+    loadDashboard(false, true)
   }, 3000)
+}
+
+function renderDiagnostics() {
+  const diagnostics = state.diagnostics || {}
+  const recent = Array.isArray(diagnostics.recent) ? diagnostics.recent : []
+  const last24Hours = number(diagnostics.last24Hours)
+  elements.healthState.textContent = last24Hours ? '需关注' : '运行正常'
+  elements.healthState.classList.toggle('warning', last24Hours > 0)
+  elements.healthSummary.textContent = `近 24 小时 ${last24Hours} 条 · 近 7 天 ${number(diagnostics.last7Days)} 条`
+  elements.diagnosticList.replaceChildren(...(recent.length ? recent.slice(0, 6).map((event) => {
+    const row = document.createElement('div')
+    row.className = 'diagnostic-row'
+    const copy = document.createElement('div')
+    const title = document.createElement('strong')
+    const detail = document.createElement('span')
+    const time = document.createElement('time')
+    title.textContent = diagnosticKindLabel(event.kind)
+    detail.textContent = `${event.device?.name || '未知设备'} · ${event.message || '未提供错误摘要'}`
+    time.textContent = formatTime(event.createdAt)
+    copy.append(title, detail)
+    row.append(copy, time)
+    return row
+  }) : [rankRow('近 7 天未收到诊断错误', '正常')]))
+}
+
+function diagnosticKindLabel(kind) {
+  return ({
+    'main-error': '主进程异常',
+    'renderer-error': '界面异常',
+    'renderer-crash': '界面进程退出',
+    'cloud-sync-error': '云同步失败',
+    'update-error': '自动更新失败'
+  })[kind] || '运行异常'
 }
 
 function renderQuota(quota) {
@@ -249,6 +303,7 @@ async function removeDevice(deviceId, name) {
 
 function disconnect() {
   clearTimeout(state.emptyRetryTimer)
+  clearInterval(state.dashboardRefreshTimer)
   localStorage.removeItem('codexmeter-sync-key')
   state.key = ''
   state.data = null

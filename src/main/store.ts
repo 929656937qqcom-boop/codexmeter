@@ -44,6 +44,11 @@ export function saveSettings(settings: AppSettings): AppSettings {
   return settings
 }
 
+export function hasStoredUpdateChannel(): boolean {
+  const settings = store.get('settings') as Partial<AppSettings> | undefined
+  return settings?.updateChannel === 'latest' || settings?.updateChannel === 'beta'
+}
+
 export function getCodexOAuth(): CodexOAuthToken | undefined {
   const token = store.get('codexOAuth')
   if (!token) {
