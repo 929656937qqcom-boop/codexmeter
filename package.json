@@ -62,6 +62,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "publish": [
       {
         "provider": "github",
@@ -89,7 +90,6 @@
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
-      "identity": "-",
       "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
       "target": [
         {
