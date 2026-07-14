@@ -38,13 +38,21 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: pnpm exec electron-builder --mac dmg zip --x64 --arm64 --publish never
+      - name: Verify macOS application signatures
+        run: |
+          set -euo pipefail
+          for app in release/mac/CodexMeter.app release/mac-arm64/CodexMeter.app; do
+            test -d "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign --display --verbose=2 "$app" 2>&1 | grep -q "Signature=adhoc"
+          done
       - name: Publish macOS desktop Beta
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "CodexMeter ${VERSION}" --notes "Unsigned internal Beta for Windows and macOS."
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "CodexMeter ${VERSION}" --notes "Internal Beta for Windows and macOS. macOS builds use ad-hoc signing; Apple notarization is planned."
           gh release upload "$TAG" \
             "release/CodexMeter-${VERSION}-mac-x64.dmg" \
             "release/CodexMeter-${VERSION}-mac-x64.zip" \

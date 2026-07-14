@@ -1,6 +1,6 @@
 {
   "name": "codexmeter",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "description": "Cross-platform Codex quota and token monitor with secure multi-device aggregation.",
   "author": "929656937qqcom-boop",
   "license": "SEE LICENSE IN LICENSE",
@@ -89,6 +89,7 @@
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
+      "identity": "-",
       "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
       "target": [
         {
@@ -108,7 +109,7 @@
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSBluetoothAlwaysUsageDescription": "CodexMeter uses Bluetooth only when connecting to an optional external quota display.",
