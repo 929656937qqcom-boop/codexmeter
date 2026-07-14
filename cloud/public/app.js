@@ -113,15 +113,11 @@ function renderDashboard() {
   elements.deviceCount.textContent = `${devices.length} 台设备`
   renderTrend(daily)
   renderSelectedDay(daily)
+  renderSelectedAccountMetrics(daily)
   renderRanks(data)
   renderDevices(devices)
   renderDiagnostics()
 
-  const todayKey = shanghaiDateKey(new Date())
-  const today = daily.find((day) => day.date === todayKey)
-  const official = (Array.isArray(data.officialDailyUsage) ? data.officialDailyUsage : []).find((day) => day.date === todayKey)
-  elements.officialTokens.textContent = `官方 ${official ? formatTokens(official.tokens) : '--'}`
-  elements.coveragePercent.textContent = `覆盖率 ${official?.tokens ? `${trim(number(today?.total?.totalTokens ?? today?.totalTokens) / official.tokens * 100)}%` : '--'}`
   elements.dedupState.textContent = `去重 ${number(data.deduplication?.duplicateEvents)} 条 · ${data.accountVerified ? '账号已校验' : '待账号校验'}`
   elements.syncMeta.textContent = data.updatedAt ? `数据截至 ${formatTime(data.updatedAt)} · 网页每 60 秒刷新` : '尚未收到设备数据'
 }
@@ -237,8 +233,13 @@ function renderTrend(days) {
   elements.trendAreaPath.setAttribute('d', points.length ? `${line} L ${points.at(-1).x} 70 L ${points[0].x} 70 Z` : '')
   elements.trendPoints.replaceChildren(...points.map((point) => {
     const group = svg('g', { class: `trend-point${point.day.date === state.selectedDate ? ' selected' : ''}` })
+    const title = svg('title', {})
+    title.textContent = accountMetricTitle(accountMetricsForDate(point.day.date, days))
+    group.append(title)
     if (point.day.date === state.selectedDate) group.append(svg('line', { x1: point.x, y1: 12, x2: point.x, y2: 70, class: 'trend-guide' }))
-    group.append(svg('circle', { cx: point.x, cy: point.y, r: 2.2 }))
+    group.append(svg('circle', { cx: point.x, cy: point.y, r: 6, class: 'trend-hit' }))
+    group.append(svg('circle', { cx: point.x, cy: point.y, r: 2.2, class: 'trend-dot' }))
+    group.addEventListener('mouseenter', () => selectDay(point.day.date, days))
     return group
   }))
   elements.trendDays.replaceChildren(...days.map((day) => {
@@ -246,6 +247,7 @@ function renderTrend(days) {
     button.type = 'button'
     button.className = day.date === state.selectedDate ? 'active' : ''
     button.innerHTML = `<span>${weekday(day.date)}</span><strong>${formatTokens(dayTokens(day))}</strong><small>${day.date.slice(5).replace('-', '/')}</small>`
+    button.title = accountMetricTitle(accountMetricsForDate(day.date, days))
     button.addEventListener('mouseenter', () => selectDay(day.date, days))
     button.addEventListener('focus', () => selectDay(day.date, days))
     button.addEventListener('click', () => selectDay(day.date, days))
@@ -254,19 +256,54 @@ function renderTrend(days) {
 }
 
 function selectDay(date, days) {
+  if (state.selectedDate === date) return
   state.selectedDate = date
   renderTrend(days)
   renderSelectedDay(days)
+  renderSelectedAccountMetrics(days)
 }
 
 function renderSelectedDay(days) {
   const day = days.find((item) => item.date === state.selectedDate)
   const projects = Array.isArray(day?.projects) ? day.projects : []
-  elements.selectedDaySummary.textContent = day ? `${day.date.slice(5).replace('-', '/')} · ${formatTokens(dayTokens(day))}` : '每日 Token 与项目构成'
+  const metrics = accountMetricsForDate(state.selectedDate, days)
+  elements.selectedDaySummary.textContent = day
+    ? `${day.date.slice(5).replace('-', '/')} · 本地 ${formatTokens(metrics.localTokens)} · 官方 ${metrics.officialTokens === null ? '--' : formatTokens(metrics.officialTokens)} · 覆盖率 ${formatCoverage(metrics.coveragePercent)}`
+    : '每日 Token 与项目构成'
   elements.projectDayLabel.textContent = day ? `${day.date.slice(5).replace('-', '/')} 项目` : '项目构成'
   elements.projectDayTotal.textContent = formatTokens(dayTokens(day))
   elements.projectDayEvents.textContent = `${number(day?.events)} 次`
   elements.dayProjectList.replaceChildren(...(projects.length ? projects.slice(0, 5).map((project, index) => projectRow(project.name, project.totalTokens, dayTokens(day), index)) : [emptyRow('当天暂无项目数据')]))
+}
+
+function renderSelectedAccountMetrics(days) {
+  const metrics = accountMetricsForDate(state.selectedDate, days)
+  const title = accountMetricTitle(metrics)
+  elements.officialTokens.textContent = `官方 ${metrics.officialTokens === null ? '--' : formatTokens(metrics.officialTokens)}`
+  elements.coveragePercent.textContent = `覆盖率 ${formatCoverage(metrics.coveragePercent)}`
+  elements.officialTokens.title = title
+  elements.coveragePercent.title = title
+  elements.officialTokens.classList.toggle('unavailable', metrics.officialTokens === null)
+  elements.coveragePercent.classList.toggle('unavailable', metrics.coveragePercent === null)
+}
+
+function accountMetricsForDate(date, days) {
+  const local = days.find((day) => day.date === date)
+  const official = (Array.isArray(state.data?.officialDailyUsage) ? state.data.officialDailyUsage : []).find((day) => day.date === date)
+  const localTokens = dayTokens(local)
+  const officialTokens = official ? number(official.tokens) : null
+  const coveragePercent = officialTokens && officialTokens > 0 ? localTokens / officialTokens * 100 : null
+  return { date, localTokens, officialTokens, coveragePercent }
+}
+
+function accountMetricTitle(metrics) {
+  const date = metrics.date ? metrics.date.slice(5).replace('-', '/') : '--'
+  if (metrics.officialTokens === null) return `${date} · 本地 ${formatTokens(metrics.localTokens)} · 官方数据尚未同步`
+  return `${date} · 本地 ${formatTokens(metrics.localTokens)} · 官方 ${formatTokens(metrics.officialTokens)} · 覆盖率 ${formatCoverage(metrics.coveragePercent)}`
+}
+
+function formatCoverage(value) {
+  return value === null ? '--' : `${trim(value)}%`
 }
 
 function renderRanks(data) {
