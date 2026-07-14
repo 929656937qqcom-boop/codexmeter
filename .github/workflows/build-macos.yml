@@ -35,10 +35,27 @@ jobs:
       - run: pnpm agent:build
       - run: bash scripts/create-mac-icon.sh
       - name: Package Intel and Apple Silicon
-        continue-on-error: true
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --mac dmg zip --x64 --arm64
+        run: pnpm exec electron-builder --mac dmg zip --x64 --arm64 --publish never
+      - name: Publish macOS desktop Beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "CodexMeter ${VERSION}" --notes "Unsigned internal Beta for Windows and macOS."
+          gh release upload "$TAG" \
+            "release/CodexMeter-${VERSION}-mac-x64.dmg" \
+            "release/CodexMeter-${VERSION}-mac-x64.zip" \
+            "release/CodexMeter-${VERSION}-mac-arm64.dmg" \
+            "release/CodexMeter-${VERSION}-mac-arm64.zip" \
+            "release/CodexMeter-${VERSION}-mac-x64.dmg.blockmap" \
+            "release/CodexMeter-${VERSION}-mac-x64.zip.blockmap" \
+            "release/CodexMeter-${VERSION}-mac-arm64.dmg.blockmap" \
+            "release/CodexMeter-${VERSION}-mac-arm64.zip.blockmap" \
+            "release/beta-mac.yml" \
+            --clobber
       - name: Package lightweight agents
         run: |
           NODE_VERSION=$(node -p "process.version")
@@ -55,6 +72,8 @@ jobs:
           name: CodexMeter-macOS
           path: |
             release/*.dmg
-            release/*-mac.zip
+            release/*-mac-*.zip
+            release/*.blockmap
+            release/beta-mac.yml
             release/CodexMeter-Agent-macOS-*.zip
           if-no-files-found: error
