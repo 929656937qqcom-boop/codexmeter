@@ -2704,7 +2704,7 @@ body:has(.widget-shell) {
   place-items: center;
   border-radius: inherit;
   background:
-    conic-gradient(#2dd4bf 0 var(--widget-five-ring), rgba(184, 242, 255, 0.96) var(--widget-five-ring) 100%);
+    conic-gradient(#2dd4bf 0 var(--widget-week-ring), rgba(184, 242, 255, 0.96) var(--widget-week-ring) 100%);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.68),
     0 0 10px rgba(45, 212, 191, 0.4);

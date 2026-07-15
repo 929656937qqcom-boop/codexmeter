@@ -994,13 +994,13 @@ function quotaDialStyle(window: QuotaWindow | null, accent: string): Record<stri
   }
 }
 
-const widgetFiveRing = computed(() => remainingPercent(fiveHourWindow.value))
+const widgetWeeklyRemaining = computed(() => remainingPercent(sevenDayWindow.value))
 const widgetOrbStyle = computed(() => ({
-  '--widget-five-ring': `${widgetFiveRing.value}%`,
-  '--widget-orb-fill': `${widgetFiveRing.value}%`
+  '--widget-week-ring': `${widgetWeeklyRemaining.value}%`,
+  '--widget-orb-fill': `${widgetWeeklyRemaining.value}%`
 }))
-const widgetOrbTone = computed(() => `is-${fiveHourState.value}`)
-const widgetFiveUpdate = computed(() => widgetClockText(snapshot.value?.refreshedAt))
+const widgetOrbTone = computed(() => `is-${sevenDayState.value}`)
+const widgetUpdateTime = computed(() => widgetClockText(snapshot.value?.refreshedAt))
 const widgetTooltip = computed(() => {
   const fiveHour = fiveHourWindow.value ? `${remainingPercent(fiveHourWindow.value)}%` : '--'
   const weekly = sevenDayWindow.value ? `${remainingPercent(sevenDayWindow.value)}%` : '--'
@@ -1009,9 +1009,9 @@ const widgetTooltip = computed(() => {
     : ['重置卡: 0']
 
   return [
-    `5 小时剩余: ${fiveHour}`,
     `一周剩余: ${weekly}`,
-    `更新: ${widgetFiveUpdate.value}`,
+    `5 小时剩余: ${fiveHour}`,
+    `更新: ${widgetUpdateTime.value}`,
     ...cards,
     '双击打开主界面'
   ].join('\n')
@@ -1495,15 +1495,15 @@ function compactDateTime(value: string): string {
         :style="widgetOrbStyle"
         :title="widgetTooltip"
         type="button"
-        aria-label="CodexMeter 用量悬浮球，双击打开主界面"
+        aria-label="CodexMeter 7 天剩余额度悬浮球，双击打开主界面"
         @dblclick="openMainFromWidget"
       >
         <span class="widget-orb-meter" aria-hidden="true">
           <span class="widget-orb-gauge" />
         </span>
         <span class="widget-orb-center">
-          <strong class="widget-orb-value">{{ fiveHourWindow ? `${remainingPercent(fiveHourWindow)}%` : '--' }}</strong>
-          <span class="widget-orb-label">5H</span>
+          <strong class="widget-orb-value">{{ sevenDayWindow ? `${remainingPercent(sevenDayWindow)}%` : '--' }}</strong>
+          <span class="widget-orb-label">7D</span>
         </span>
       </button>
     </main>
