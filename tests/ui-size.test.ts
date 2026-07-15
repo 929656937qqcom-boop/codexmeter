@@ -74,7 +74,7 @@ describe('desktop sizing', () => {
     expect(appSource).toContain('dashboard-control-strip')
     expect(appSource).toContain('cloudKeyGenerating')
     expect(appSource).toContain('cloudDashboardOpening')
-    expect(appSource).toContain("cloudDialogVisible.value = true\n  if (!window.codexMeter) return")
+    expect(appSource).toMatch(/cloudDialogVisible\.value = true\r?\n  if \(!window\.codexMeter\) return/)
     expect(appSource).toContain('window-control-strip')
     expect(appSource).toContain('window-control-button')
     expect(appSource).toContain('minimizeMainWindow')
