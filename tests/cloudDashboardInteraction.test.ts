@@ -24,4 +24,19 @@ describe('cloud dashboard daily account metrics', () => {
     expect(dashboardStyles).toContain('.trend-point .trend-hit')
     expect(dashboardStyles).toContain('pointer-events: all')
   })
+
+  it('keeps the pairing page out of the normal refresh flow', () => {
+    expect(dashboardSource).toContain("showLoadingView('正在恢复云端看板'")
+    expect(dashboardSource).toContain("setConnectionState('connecting', '正在连接')")
+    expect(dashboardSource).toContain("setConnectionState('warning', '刷新失败 · 保留上次数据')")
+    expect(dashboardSource).toContain('scheduleConnectionRetry')
+    expect(dashboardSource).toMatch(/if \(error\?\.kind === 'auth'\)[\s\S]*showPairingView/)
+  })
+
+  it('resets connection status classes before applying the current state', () => {
+    expect(dashboardSource).toContain("classList.remove('connected', 'connecting', 'warning', 'disconnected')")
+    expect(dashboardStyles).toContain('.connection-state.connecting')
+    expect(dashboardStyles).toContain('.connection-state.warning')
+    expect(dashboardStyles).toContain('.connection-state.disconnected')
+  })
 })

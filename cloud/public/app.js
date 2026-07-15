@@ -5,12 +5,14 @@ const state = {
   selectedDate: '',
   emptyRetries: 0,
   emptyRetryTimer: 0,
+  connectionRetryCount: 0,
+  connectionRetryTimer: 0,
   dashboardRefreshTimer: 0,
   diagnostics: { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
 }
 
 const ids = [
-  'pairingView', 'dashboardView', 'pairingForm', 'syncKeyInput', 'pairingError', 'connectionState', 'refreshButton',
+  'pairingView', 'loadingView', 'loadingTitle', 'loadingDetail', 'retryButton', 'dashboardView', 'pairingForm', 'syncKeyInput', 'pairingError', 'connectionState', 'refreshButton',
   'disconnectButton', 'emptyNotice', 'todayTokens', 'todayValue', 'todayEvents', 'weekTokens', 'weekValue', 'weekEvents',
   'fiveHourState', 'fiveHourDial', 'fiveHourRemaining', 'fiveHourUsed', 'fiveHourReset', 'weekQuotaState', 'weekQuotaDial',
   'weekRemaining', 'weekUsed', 'weekReset', 'resetCardTitle', 'resetCardList',
@@ -30,6 +32,7 @@ elements.pairingForm.addEventListener('submit', async (event) => {
 })
 elements.refreshButton.addEventListener('click', () => loadDashboard(false))
 elements.disconnectButton.addEventListener('click', disconnect)
+elements.retryButton.addEventListener('click', () => loadDashboard(false))
 document.querySelectorAll('.period-card').forEach((button) => button.addEventListener('click', () => {
   state.activePeriod = button.dataset.period
   document.querySelectorAll('.period-card').forEach((item) => item.classList.toggle('active', item === button))
@@ -38,11 +41,18 @@ document.querySelectorAll('.period-card').forEach((button) => button.addEventLis
 
 const pairCode = new URL(location.href).searchParams.get('pair')
 if (pairCode) redeemWebPair(pairCode)
-else if (state.key) loadDashboard(false)
+else if (state.key) {
+  showLoadingView('正在恢复云端看板', '正在读取已保存的安全凭证')
+  setConnectionState('connecting', '正在连接')
+  loadDashboard(false)
+} else {
+  showPairingView()
+}
 
 async function redeemWebPair(code) {
   setBusy(true)
-  elements.connectionState.textContent = '正在安全登录'
+  showLoadingView('正在安全登录', '正在验证一次性配对码')
+  setConnectionState('connecting', '正在安全登录')
   try {
     const response = await fetch(`/api/pair?code=${encodeURIComponent(code)}`)
     const data = await response.json()
@@ -52,8 +62,8 @@ async function redeemWebPair(code) {
     history.replaceState(null, '', location.pathname)
     await loadDashboard(false)
   } catch (error) {
-    elements.pairingError.textContent = error instanceof Error ? error.message : '自动登录失败'
-    elements.connectionState.textContent = '连接失败'
+    showPairingView(error instanceof Error ? error.message : '自动登录失败')
+    setConnectionState('warning', '连接失败')
   } finally {
     setBusy(false)
   }
@@ -62,38 +72,90 @@ async function redeemWebPair(code) {
 async function loadDashboard(persist, silent = false) {
   if (!silent) setBusy(true)
   elements.pairingError.textContent = ''
+  if (!state.data) showLoadingView('正在恢复云端看板', '正在安全读取账号汇总数据')
+  if (!silent) setConnectionState('connecting', state.data ? '正在刷新' : '正在连接')
   try {
-    if (!/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw new Error('同步凭证格式不正确')
+    if (!/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw requestError('同步凭证格式不正确', 'auth')
     const headers = { authorization: `Bearer ${state.key}` }
     const [response, diagnosticResponse] = await Promise.all([
       fetch('/api/usage', { headers }),
       fetch('/api/diagnostics', { headers })
     ])
-    if (!response.ok) throw new Error(response.status === 401 ? '同步凭证无效' : '云端数据读取失败')
+    if (!response.ok) throw requestError(response.status === 401 ? '同步凭证已失效，请重新连接' : '云端数据读取失败', response.status === 401 ? 'auth' : 'network')
     state.data = await response.json()
     state.diagnostics = diagnosticResponse.ok
       ? await diagnosticResponse.json()
       : { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
     if (persist) localStorage.setItem('codexmeter-sync-key', state.key)
+    clearTimeout(state.connectionRetryTimer)
+    state.connectionRetryCount = 0
     renderDashboard()
     elements.pairingView.hidden = true
+    elements.loadingView.hidden = true
     elements.dashboardView.hidden = false
     elements.refreshButton.hidden = false
     elements.disconnectButton.hidden = false
-    elements.connectionState.textContent = state.data.deviceCount ? '已同步 · 60 秒刷新' : '已连接 · 待同步'
-    elements.connectionState.classList.add('connected')
+    setConnectionState('connected', state.data.deviceCount ? '已同步 · 60 秒刷新' : '已连接 · 待同步')
     scheduleDashboardRefresh()
   } catch (error) {
-    if (silent && state.data) {
-      elements.connectionState.textContent = '刷新失败 · 保留上次数据'
+    if (error?.kind === 'auth') {
+      localStorage.removeItem('codexmeter-sync-key')
+      showPairingView(error.message)
+      setConnectionState('warning', '需要重新连接')
       return
     }
-    elements.pairingView.hidden = false
-    elements.dashboardView.hidden = true
-    elements.pairingError.textContent = error instanceof Error ? error.message : '连接失败'
+    if (state.data) {
+      elements.dashboardView.hidden = false
+      elements.loadingView.hidden = true
+      setConnectionState('warning', '刷新失败 · 保留上次数据')
+      return
+    }
+    scheduleConnectionRetry(error instanceof Error ? error.message : '连接暂时中断')
   } finally {
     if (!silent) setBusy(false)
   }
+}
+
+function requestError(message, kind) {
+  const error = new Error(message)
+  error.kind = kind
+  return error
+}
+
+function setConnectionState(kind, text) {
+  elements.connectionState.classList.remove('connected', 'connecting', 'warning', 'disconnected')
+  elements.connectionState.classList.add(kind)
+  elements.connectionState.textContent = text
+}
+
+function showLoadingView(title, detail, paused = false) {
+  elements.pairingView.hidden = true
+  elements.dashboardView.hidden = true
+  elements.loadingView.hidden = false
+  elements.loadingView.classList.toggle('is-paused', paused)
+  elements.loadingTitle.textContent = title
+  elements.loadingDetail.textContent = detail
+  elements.retryButton.hidden = !paused
+}
+
+function showPairingView(message = '') {
+  clearTimeout(state.connectionRetryTimer)
+  elements.loadingView.hidden = true
+  elements.dashboardView.hidden = true
+  elements.pairingView.hidden = false
+  elements.refreshButton.hidden = true
+  elements.disconnectButton.hidden = true
+  elements.pairingError.textContent = message
+  setConnectionState('disconnected', state.key ? '等待连接' : '未连接')
+}
+
+function scheduleConnectionRetry(message) {
+  clearTimeout(state.connectionRetryTimer)
+  state.connectionRetryCount += 1
+  const delay = Math.min(15_000, 1500 * (2 ** Math.min(3, state.connectionRetryCount - 1)))
+  showLoadingView('正在恢复连接', `${message} · ${Math.ceil(delay / 1000)} 秒后自动重试`, true)
+  setConnectionState('warning', '连接中断 · 正在重试')
+  state.connectionRetryTimer = setTimeout(() => loadDashboard(false, true), delay)
 }
 
 function renderDashboard() {
@@ -375,17 +437,14 @@ async function removeDevice(deviceId, name) {
 
 function disconnect() {
   clearTimeout(state.emptyRetryTimer)
+  clearTimeout(state.connectionRetryTimer)
   clearInterval(state.dashboardRefreshTimer)
   localStorage.removeItem('codexmeter-sync-key')
   state.key = ''
   state.data = null
   elements.syncKeyInput.value = ''
-  elements.dashboardView.hidden = true
-  elements.pairingView.hidden = false
-  elements.refreshButton.hidden = true
-  elements.disconnectButton.hidden = true
-  elements.connectionState.textContent = '未连接'
-  elements.connectionState.classList.remove('connected')
+  state.connectionRetryCount = 0
+  showPairingView()
 }
 
 function setBusy(busy) {

@@ -22,10 +22,21 @@ button { cursor: pointer; }
 .top-actions { display: flex; align-items: center; gap: 8px; }
 .connection-state { color: #facc15; font-size: 12px; font-weight: 850; }
 .connection-state.connected { color: #4ade80; }
+.connection-state.connecting { color: #67e8f9; }
+.connection-state.warning { color: #facc15; }
+.connection-state.disconnected { color: #8da6bb; }
 
 button { height: 34px; padding: 0 13px; border: 1px solid rgba(103, 232, 249, .24); border-radius: 6px; color: #c9f8ff; background: rgba(8, 145, 178, .12); }
 button:hover { border-color: rgba(103, 232, 249, .58); background: rgba(8, 145, 178, .2); }
 button.primary { color: #04131d; background: #67e8f9; font-weight: 850; }
+
+.loading-view { display: grid; place-items: center; align-content: center; gap: 10px; min-height: 480px; color: #8da6bb; text-align: center; }
+.loading-view strong { color: #eafaff; font-size: 18px; }
+.loading-view span { font-size: 12px; }
+.loading-view button { margin-top: 6px; }
+.loading-indicator { width: 28px; height: 28px; border: 3px solid rgba(103, 232, 249, .16); border-top-color: #67e8f9; border-radius: 50%; animation: loading-spin .8s linear infinite; }
+.loading-view.is-paused .loading-indicator { border-color: rgba(250, 204, 21, .34); border-top-color: #facc15; animation: none; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
 
 .pairing-view { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); align-items: center; gap: 54px; min-height: 540px; padding: 60px 7%; }
 .eyebrow { color: #2dd4bf; font-size: 12px; font-weight: 900; }
