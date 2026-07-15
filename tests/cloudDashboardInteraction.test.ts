@@ -30,6 +30,8 @@ describe('cloud dashboard daily account metrics', () => {
     expect(dashboardSource).toContain("setConnectionState('connecting', '正在连接')")
     expect(dashboardSource).toContain("setConnectionState('warning', '刷新失败 · 保留上次数据')")
     expect(dashboardSource).toContain('scheduleConnectionRetry')
+    expect(dashboardSource).toContain("fetchWithTimeout('/api/usage', { headers }, 12_000)")
+    expect(dashboardSource).toContain("fetchWithTimeout('/api/diagnostics', { headers }, 5_000).catch(() => null)")
     expect(dashboardSource).toMatch(/if \(error\?\.kind === 'auth'\)[\s\S]*showPairingView/)
   })
 

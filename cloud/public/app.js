@@ -78,12 +78,12 @@ async function loadDashboard(persist, silent = false) {
     if (!/^cm_(?:sync|device)_[A-Za-z0-9_-]{32,}$/.test(state.key)) throw requestError('同步凭证格式不正确', 'auth')
     const headers = { authorization: `Bearer ${state.key}` }
     const [response, diagnosticResponse] = await Promise.all([
-      fetch('/api/usage', { headers }),
-      fetch('/api/diagnostics', { headers })
+      fetchWithTimeout('/api/usage', { headers }, 12_000),
+      fetchWithTimeout('/api/diagnostics', { headers }, 5_000).catch(() => null)
     ])
     if (!response.ok) throw requestError(response.status === 401 ? '同步凭证已失效，请重新连接' : '云端数据读取失败', response.status === 401 ? 'auth' : 'network')
     state.data = await response.json()
-    state.diagnostics = diagnosticResponse.ok
+    state.diagnostics = diagnosticResponse?.ok
       ? await diagnosticResponse.json()
       : { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
     if (persist) localStorage.setItem('codexmeter-sync-key', state.key)
@@ -120,6 +120,19 @@ function requestError(message, kind) {
   const error = new Error(message)
   error.kind = kind
   return error
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (error?.name === 'AbortError') throw requestError('云端响应超时', 'network')
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function setConnectionState(kind, text) {
