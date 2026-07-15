@@ -32,6 +32,8 @@ describe('cloud dashboard daily account metrics', () => {
     expect(dashboardSource).toContain('scheduleConnectionRetry')
     expect(dashboardSource).toContain("fetchWithTimeout('/api/usage', { headers }, 12_000)")
     expect(dashboardSource).toContain("fetchWithTimeout('/api/diagnostics', { headers }, 5_000).catch(() => null)")
+    expect(dashboardSource).toContain("scheduleConnectionRetry('正在重新校验同步凭证')")
+    expect(dashboardSource).not.toMatch(/kind === 'auth'[\s\S]{0,160}localStorage\.removeItem/)
     expect(dashboardSource).toMatch(/if \(error\?\.kind === 'auth'\)[\s\S]*showPairingView/)
   })
 

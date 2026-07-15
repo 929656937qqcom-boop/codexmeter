@@ -6,6 +6,7 @@ const state = {
   emptyRetries: 0,
   emptyRetryTimer: 0,
   connectionRetryCount: 0,
+  authRetryCount: 0,
   connectionRetryTimer: 0,
   dashboardRefreshTimer: 0,
   diagnostics: { last24Hours: 0, last7Days: 0, byKind: {}, recent: [] }
@@ -89,6 +90,7 @@ async function loadDashboard(persist, silent = false) {
     if (persist) localStorage.setItem('codexmeter-sync-key', state.key)
     clearTimeout(state.connectionRetryTimer)
     state.connectionRetryCount = 0
+    state.authRetryCount = 0
     renderDashboard()
     elements.pairingView.hidden = true
     elements.loadingView.hidden = true
@@ -99,7 +101,11 @@ async function loadDashboard(persist, silent = false) {
     scheduleDashboardRefresh()
   } catch (error) {
     if (error?.kind === 'auth') {
-      localStorage.removeItem('codexmeter-sync-key')
+      if (state.key && state.authRetryCount < 1) {
+        state.authRetryCount += 1
+        scheduleConnectionRetry('正在重新校验同步凭证')
+        return
+      }
       showPairingView(error.message)
       setConnectionState('warning', '需要重新连接')
       return
@@ -457,6 +463,7 @@ function disconnect() {
   state.data = null
   elements.syncKeyInput.value = ''
   state.connectionRetryCount = 0
+  state.authRetryCount = 0
   showPairingView()
 }
 
