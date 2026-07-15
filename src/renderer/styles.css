@@ -2633,26 +2633,19 @@ body:has(.widget-shell) {
 
 .widget-orb {
   --widget-orb-accent: #00bfa5;
-  --widget-orb-fill: 0%;
   position: relative;
   display: grid;
   width: 56px;
   height: 56px;
   padding: 0;
   place-items: center;
-  isolation: isolate;
-  overflow: visible;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.88);
   border-radius: 999px;
-  background:
-    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.96) 0 8%, transparent 27%),
-    linear-gradient(145deg, rgba(251, 255, 255, 0.92), rgba(209, 247, 255, 0.7));
+  background: var(--widget-orb-accent);
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.92),
-    inset 0 -7px 12px rgba(15, 118, 110, 0.16),
-    0 10px 18px rgba(15, 23, 42, 0.16),
-    0 0 0 1px rgba(173, 253, 237, 0.36);
-  backdrop-filter: blur(20px);
+    inset 0 1px 2px rgba(255, 255, 255, 0.45),
+    0 4px 10px rgba(15, 23, 42, 0.2);
   cursor: pointer;
   transition:
     transform 0.22s ease,
@@ -2662,29 +2655,11 @@ body:has(.widget-shell) {
 
 .widget-orb:hover {
   transform: scale(1.02);
-  box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.96),
-    inset 0 -7px 12px rgba(15, 118, 110, 0.14),
-    0 11px 20px rgba(15, 23, 42, 0.17),
-    0 0 0 1px rgba(173, 253, 237, 0.42);
+  box-shadow: 0 5px 12px rgba(15, 23, 42, 0.24);
 }
 
 .widget-orb:active {
   transform: scale(0.98);
-}
-
-.widget-orb::before {
-  position: absolute;
-  border-radius: inherit;
-  content: "";
-  pointer-events: none;
-  z-index: -1;
-  inset: -3px;
-  background: rgba(45, 212, 191, 0.16);
-  box-shadow:
-    0 0 13px rgba(45, 212, 191, 0.42),
-    0 0 20px rgba(20, 184, 166, 0.18);
-  opacity: 0.86;
 }
 
 .widget-orb.is-attention,
@@ -2697,59 +2672,8 @@ body:has(.widget-shell) {
   --widget-orb-accent: #ef4444;
 }
 
-.widget-orb-meter {
-  position: absolute;
-  inset: 4px;
-  display: grid;
-  place-items: center;
-  border-radius: inherit;
-  background:
-    conic-gradient(#2dd4bf 0 var(--widget-week-ring), rgba(184, 242, 255, 0.96) var(--widget-week-ring) 100%);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.68),
-    0 0 10px rgba(45, 212, 191, 0.4);
-}
-
-.widget-orb-gauge {
-  position: absolute;
-  inset: 4px;
-  overflow: hidden;
-  border-radius: inherit;
-  background:
-    radial-gradient(circle at 32% 18%, rgba(255, 255, 255, 0.74) 0 12%, transparent 37%),
-    linear-gradient(180deg, rgba(96, 255, 232, 0.94), rgba(0, 191, 165, 0.95) 55%, rgba(8, 145, 137, 0.98));
-  box-shadow:
-    inset 0 1px 3px rgba(255, 255, 255, 0.62),
-    inset 0 -8px 11px rgba(0, 96, 84, 0.22),
-    inset 0 0 0 1px rgba(103, 232, 249, 0.22);
-}
-
-.widget-orb-gauge::after {
-  position: absolute;
-  left: -10%;
-  right: -10%;
-  top: calc(100% - var(--widget-orb-fill));
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(219, 255, 248, 0.38);
-  content: "";
-  transform: translateY(-45%);
-  animation: widget-water-sway 2.8s ease-in-out infinite;
-}
-
-@keyframes widget-water-sway {
-  0%,
-  100% {
-    transform: translate(-4%, -45%) rotate(-1deg);
-  }
-  50% {
-    transform: translate(4%, -50%) rotate(1deg);
-  }
-}
-
 .widget-orb-center {
   position: relative;
-  z-index: 5;
   display: grid;
   min-width: 0;
   place-items: center;
@@ -2759,7 +2683,7 @@ body:has(.widget-shell) {
   line-height: 1;
   pointer-events: none;
   text-align: center;
-  text-shadow: 0 1px 2px rgba(0, 84, 74, 0.3);
+  text-shadow: 0 1px 2px rgba(0, 84, 74, 0.25);
 }
 
 .widget-orb-value {

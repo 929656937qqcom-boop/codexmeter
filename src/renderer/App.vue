@@ -801,7 +801,7 @@ function configureAutoRefresh(minutes: RefreshIntervalMinutes): void {
   }
 
   refreshTimer = setInterval(() => {
-    void refreshDashboardData()
+    void refreshQuota()
   }, minutes * 60 * 1000)
 }
 
@@ -995,10 +995,6 @@ function quotaDialStyle(window: QuotaWindow | null, accent: string): Record<stri
 }
 
 const widgetWeeklyRemaining = computed(() => remainingPercent(sevenDayWindow.value))
-const widgetOrbStyle = computed(() => ({
-  '--widget-week-ring': `${widgetWeeklyRemaining.value}%`,
-  '--widget-orb-fill': `${widgetWeeklyRemaining.value}%`
-}))
 const widgetOrbTone = computed(() => `is-${sevenDayState.value}`)
 const widgetUpdateTime = computed(() => widgetClockText(snapshot.value?.refreshedAt))
 const widgetTooltip = computed(() => {
@@ -1492,17 +1488,13 @@ function compactDateTime(value: string): string {
       <button
         class="widget-orb"
         :class="widgetOrbTone"
-        :style="widgetOrbStyle"
         :title="widgetTooltip"
         type="button"
         aria-label="CodexMeter 7 天剩余额度悬浮球，双击打开主界面"
         @dblclick="openMainFromWidget"
       >
-        <span class="widget-orb-meter" aria-hidden="true">
-          <span class="widget-orb-gauge" />
-        </span>
         <span class="widget-orb-center">
-          <strong class="widget-orb-value">{{ sevenDayWindow ? `${remainingPercent(sevenDayWindow)}%` : '--' }}</strong>
+          <strong class="widget-orb-value">{{ sevenDayWindow ? `${widgetWeeklyRemaining}%` : '--' }}</strong>
           <span class="widget-orb-label">7D</span>
         </span>
       </button>

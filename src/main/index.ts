@@ -486,7 +486,8 @@ app.whenReady().then(async () => {
     saveSettings({ ...getSettings(), updateChannel: 'beta' })
   }
   configureBluetoothPermissions()
-  await createWindow()
+  const window = await createWidgetWindow()
+  window.show()
   createTray()
   initializeUpdater(getSettings().updateChannel, broadcastUpdateState)
 })

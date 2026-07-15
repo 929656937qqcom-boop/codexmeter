@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import {
   analyzeCodexUsageEvents,
   type CodexUsageSummary,
@@ -16,36 +17,97 @@ export function readCodexUsageSummaryFromCodexHome(codexHome: string, now = new 
   const events = readSessionEvents([
     path.join(codexHome, 'sessions'),
     path.join(codexHome, 'archived_sessions')
-  ])
+  ], now)
   const automations = readAutomations(path.join(codexHome, 'automations'))
   return analyzeCodexUsageEvents(events, { now, automations })
 }
 
-function readSessionEvents(roots: string[]): UsageAnalysisEvent[] {
-  const events: UsageAnalysisEvent[] = []
+function* readSessionEvents(roots: string[], now: Date): Iterable<UsageAnalysisEvent> {
+  const modifiedSince = shanghaiMonthStart(now)
   for (const root of roots) {
-    for (const filePath of listJsonlFiles(root)) {
-      const file = path.basename(filePath)
-      const lines = safeReadText(filePath).split(/\r?\n/)
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue
-        }
-        try {
-          const parsed = JSON.parse(line) as UsageAnalysisEvent
-          events.push({
-            file: filePath,
-            type: parsed.type,
-            timestamp: parsed.timestamp,
-            payload: parsed.payload
-          })
-        } catch {
-          events.push({ file, type: 'invalid' })
-        }
+    for (const filePath of listJsonlFiles(root, modifiedSince)) {
+      yield* readJsonlEvents(filePath)
+    }
+  }
+}
+
+function* readJsonlEvents(filePath: string): Iterable<UsageAnalysisEvent> {
+  const file = path.basename(filePath)
+  const buffer = Buffer.allocUnsafe(64 * 1024)
+  const decoder = new StringDecoder('utf8')
+  let pending = ''
+  let fileDescriptor: number | undefined
+
+  try {
+    fileDescriptor = openSync(filePath, 'r')
+    let bytesRead = 0
+    do {
+      bytesRead = readSync(fileDescriptor, buffer, 0, buffer.length, null)
+      pending += decoder.write(buffer.subarray(0, bytesRead))
+      let lineEnd = pending.indexOf('\n')
+      while (lineEnd >= 0) {
+        const line = pending.slice(0, lineEnd).replace(/\r$/, '')
+        pending = pending.slice(lineEnd + 1)
+        const event = parseJsonlEvent(line, filePath, file)
+        if (event) yield event
+        lineEnd = pending.indexOf('\n')
+      }
+    } while (bytesRead > 0)
+
+    pending += decoder.end()
+    const event = parseJsonlEvent(pending.replace(/\r$/, ''), filePath, file)
+    if (event) yield event
+  } catch {
+    yield { file, type: 'invalid' }
+  } finally {
+    if (fileDescriptor !== undefined) closeSync(fileDescriptor)
+  }
+}
+
+function parseJsonlEvent(line: string, filePath: string, file: string): UsageAnalysisEvent | undefined {
+  if (!line.trim()) return undefined
+  if (!isUsageRelevantLine(line)) return undefined
+  if (line.includes('"type":"function_call_output"')) {
+    return {
+      file: filePath,
+      type: 'response_item',
+      timestamp: jsonStringField(line, 'timestamp'),
+      payload: {
+        type: 'function_call_output',
+        call_id: jsonStringField(line, 'call_id') ?? '',
+        output_chars: line.length
       }
     }
   }
-  return events
+  try {
+    const parsed = JSON.parse(line) as UsageAnalysisEvent
+    return {
+      file: filePath,
+      type: parsed.type,
+      timestamp: parsed.timestamp,
+      payload: parsed.payload
+    }
+  } catch {
+    return { file, type: 'invalid' }
+  }
+}
+
+function isUsageRelevantLine(line: string): boolean {
+  if (line.includes('"type":"session_meta"')) return true
+  if (line.includes('"type":"event_msg"')) return line.includes('"type":"token_count"')
+  if (!line.includes('"type":"response_item"')) return false
+  if (line.includes('"type":"function_call"') || line.includes('"type":"function_call_output"')) return true
+  return line.includes('"type":"message"') && line.includes('"role":"user"')
+}
+
+function jsonStringField(line: string, key: string): string | undefined {
+  const match = line.match(new RegExp(`"${key}":"((?:\\\\.|[^"\\\\])*)"`))
+  if (!match) return undefined
+  try {
+    return JSON.parse(`"${match[1]}"`) as string
+  } catch {
+    return match[1]
+  }
 }
 
 function readAutomations(root: string): UsageAutomationInput[] {
@@ -69,8 +131,15 @@ export function parseAutomationToml(source: string, fallbackId: string): UsageAu
   return { id, name, status, rrule }
 }
 
-function listJsonlFiles(root: string): string[] {
+function listJsonlFiles(root: string, modifiedSince: Date): string[] {
   return listFiles(root, (filePath) => filePath.toLowerCase().endsWith('.jsonl'))
+    .filter((filePath) => {
+      try {
+        return statSync(filePath).mtime >= modifiedSince
+      } catch {
+        return false
+      }
+    })
 }
 
 function listAutomationFiles(root: string): string[] {
@@ -126,4 +195,10 @@ function safeReadText(filePath: string): string {
 function readTomlString(source: string, key: string): string | undefined {
   const match = source.match(new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm'))
   return match?.[1]
+}
+
+function shanghaiMonthStart(now: Date): Date {
+  const shanghaiOffsetMs = 8 * 60 * 60 * 1000
+  const shifted = new Date(now.getTime() + shanghaiOffsetMs)
+  return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) - shanghaiOffsetMs)
 }

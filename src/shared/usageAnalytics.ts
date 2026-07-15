@@ -297,7 +297,7 @@ const emptyPeriod = (): UsagePeriodSummary => ({
 })
 
 export function analyzeCodexUsageEvents(
-  events: UsageAnalysisEvent[],
+  events: Iterable<UsageAnalysisEvent>,
   options: UsageAnalysisOptions = {}
 ): CodexUsageSummary {
   const now = options.now ?? new Date()
@@ -390,7 +390,7 @@ export function analyzeCodexUsageEvents(
     if (payload?.type === 'function_call_output') {
       const callId = stringValue(payload.call_id) ?? ''
       const name = pendingCalls.get(callId) ?? 'tool_output'
-      incrementTool(tools, name, 0, String(payload.output ?? '').length)
+      incrementTool(tools, name, 0, numberValue(payload.output_chars) || String(payload.output ?? '').length)
       continue
     }
 

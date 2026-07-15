@@ -34,6 +34,16 @@ describe('Codex usage provider', () => {
               }
             }
           }
+        }),
+        JSON.stringify({
+          type: 'response_item',
+          timestamp: '2026-07-08T02:02:00.000Z',
+          payload: { type: 'function_call', name: 'shell_command', call_id: 'large-output' }
+        }),
+        JSON.stringify({
+          type: 'response_item',
+          timestamp: '2026-07-08T02:03:00.000Z',
+          payload: { type: 'function_call_output', call_id: 'large-output', output: 'x'.repeat(70 * 1024) }
         })
       ].join('\n'),
       'utf8'
@@ -58,6 +68,8 @@ describe('Codex usage provider', () => {
       projects: [{ name: 'CodexMeter', totalTokens: 130 }]
     })
     expect(summary.projects[0]).toMatchObject({ name: 'CodexMeter', totalTokens: 130 })
+    expect(summary.tools[0]).toMatchObject({ name: 'shell_command', calls: 1 })
+    expect(summary.tools[0].outputChars).toBeGreaterThan(70 * 1024)
     expect(summary.tasks.some((task) => task.source === 'codex-token')).toBe(true)
   })
 })
