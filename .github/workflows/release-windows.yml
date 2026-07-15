@@ -39,12 +39,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Set release version
         shell: pwsh
-        run: pnpm version "${{ inputs.version }}" --no-git-tag-version
+        run: |
+          pnpm version "${{ inputs.version }}" --no-git-tag-version
+          node -e "const fs=require('fs');const p=require('./package.json');p.build.publish[0].channel='${{ inputs.channel }}';fs.writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
       - run: pnpm test
       - run: pnpm build
       - name: Package Windows NSIS updater
         shell: pwsh
-        run: pnpm exec electron-builder --win nsis --publish never -c.publish.channel=${{ inputs.channel }}
+        run: pnpm exec electron-builder --win nsis --publish never
       - name: Create GitHub release
         shell: pwsh
         env:
