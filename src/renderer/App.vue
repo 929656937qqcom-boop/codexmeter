@@ -53,6 +53,7 @@ const snapshot = ref<QuotaSnapshot | null>(null)
 const settings = ref<AppSettings | null>(null)
 const loading = ref(false)
 const usageLoading = ref(false)
+const refreshMessage = ref('')
 const status = ref('就绪')
 const activeUsagePeriod = ref<UsagePeriodKey>('today')
 const activeUsageInsight = ref<UsageInsightView>('trend')
@@ -181,12 +182,14 @@ const systemStateLabel = computed(() => {
   return systemState.value === 'connected' ? '已连接' : '未连接'
 })
 const refreshTime = computed(() => {
-  if (!snapshot.value) {
+  const refreshedAt = usageSummary.value?.generatedAt ?? snapshot.value?.refreshedAt
+  if (!refreshedAt) {
     return '--:--:--'
   }
 
-  return new Date(snapshot.value.refreshedAt).toLocaleTimeString()
+  return new Date(refreshedAt).toLocaleTimeString()
 })
+const refreshStatusLabel = computed(() => refreshMessage.value || 'Refresh')
 const refreshSummary = computed(() => {
   if (!snapshot.value) {
     return '尚未刷新'
@@ -372,7 +375,9 @@ onMounted(async () => {
   })
 
   if (isWidgetView) {
+    settings.value = window.codexMeter ? await window.codexMeter.getSettings() : null
     snapshot.value = window.codexMeter ? await window.codexMeter.getLatestQuota() : sampleQuotaSnapshot()
+    configureAutoRefresh(settings.value?.refreshIntervalMinutes || 5)
     return
   }
 
@@ -442,8 +447,17 @@ async function refreshQuota(): Promise<void> {
 
 async function refreshDashboardData(): Promise<void> {
   if (loading.value || usageLoading.value) return
-  await refreshQuota()
-  await refreshUsageSummary()
+  refreshMessage.value = '正在刷新额度'
+  try {
+    await refreshQuota()
+    refreshMessage.value = '正在分析并同步'
+    await refreshUsageSummary()
+    refreshMessage.value = '刷新完成'
+    showNotice('数据已刷新并同步云端')
+  } catch (error) {
+    refreshMessage.value = '刷新失败'
+    showNotice(error instanceof Error ? `刷新失败：${error.message}` : '刷新失败')
+  }
 }
 
 async function refreshUsageSummary(): Promise<void> {
@@ -796,7 +810,7 @@ async function sendBlePayload(payload: unknown, successText: string): Promise<vo
 
 function configureAutoRefresh(minutes: RefreshIntervalMinutes): void {
   clearAutoRefresh()
-  if (minutes === 0 || isWidgetView) {
+  if (minutes === 0) {
     return
   }
 
@@ -1521,6 +1535,7 @@ function compactDateTime(value: string): string {
             </button>
             <button
               class="dashboard-refresh"
+              :class="{ 'is-loading': loading || usageLoading }"
               type="button"
               aria-label="刷新"
               :disabled="loading || usageLoading"
@@ -1551,7 +1566,7 @@ function compactDateTime(value: string): string {
         <div class="dashboard-status-strip">
           <span class="dashboard-section-label">额度与 Token 分析</span>
           <b :class="systemState">{{ systemState === 'connected' ? 'ONLINE' : systemState === 'error' ? 'ERROR' : 'OFFLINE' }}</b>
-          <em>Refresh</em>
+          <em>{{ refreshStatusLabel }}</em>
           <strong>{{ refreshTime }}</strong>
         </div>
 

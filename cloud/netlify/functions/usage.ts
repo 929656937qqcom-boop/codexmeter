@@ -32,6 +32,7 @@ export default async function usage(req: Request): Promise<Response> {
     if (item.accountFingerprint && !account?.fingerprint) {
       await store.setJSON(accountKey, { fingerprint: item.accountFingerprint, verifiedAt: item.receivedAt })
     }
+    await removeSupersededDeviceSnapshots(store, prefix, aliasPrefix, item)
     await store.setJSON(`${prefix}${item.device.id}.json`, item)
     if (auth.credentialType === 'device') {
       await store.setJSON(`auth/device-tokens/${auth.credentialHash}.json`, { namespace, deviceId: item.device.id, updatedAt: item.receivedAt })
@@ -88,6 +89,42 @@ export default async function usage(req: Request): Promise<Response> {
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers })
+}
+
+async function removeSupersededDeviceSnapshots(
+  store: ReturnType<typeof getStore>,
+  prefix: string,
+  aliasPrefix: string,
+  item: StoredDeviceUsage
+): Promise<void> {
+  if (!item.device.stableKey) return
+  const { blobs } = await store.list({ prefix })
+  await Promise.all(blobs.map(async (blob) => {
+    const deviceId = blob.key.slice(prefix.length).replace(/\.json$/, '')
+    if (deviceId === item.device.id) return
+
+    const existing = await store.get(blob.key, { type: 'json' }) as StoredDeviceUsage | null
+    if (!existing || !isSupersededDeviceSnapshot(existing, item)) return
+
+    const oldAliasKey = `${aliasPrefix}${deviceId}.json`
+    const newAliasKey = `${aliasPrefix}${item.device.id}.json`
+    const [oldAlias, newAlias] = await Promise.all([
+      store.get(oldAliasKey, { type: 'json' }) as Promise<{ name?: unknown } | null>,
+      store.get(newAliasKey, { type: 'json' }) as Promise<{ name?: unknown } | null>
+    ])
+    if (oldAlias && !newAlias) await store.setJSON(newAliasKey, oldAlias)
+    await Promise.all([
+      store.delete(blob.key),
+      store.delete(oldAliasKey)
+    ])
+  }))
+}
+
+function isSupersededDeviceSnapshot(existing: StoredDeviceUsage, current: StoredDeviceUsage): boolean {
+  if (existing.device.stableKey) return existing.device.stableKey === current.device.stableKey
+  return existing.device.name.trim() === current.device.name.trim()
+    && existing.device.platform === current.device.platform
+    && (existing.device.arch ?? '') === (current.device.arch ?? '')
 }
 
 export const config: Config = {

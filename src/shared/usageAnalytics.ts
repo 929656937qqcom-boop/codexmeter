@@ -46,6 +46,7 @@ export interface UsageDataQuality {
 
 export interface UsageDeviceProfile {
   id: string
+  stableKey?: string
   name: string
   platform: string
   arch?: string

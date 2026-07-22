@@ -5,7 +5,7 @@ import { NoopDeviceBridge } from './deviceBridge.js'
 import { cancelCodexOAuth, startCodexOAuth } from './oauth.js'
 import { fetchQuotaSnapshot } from './quotaProvider.js'
 import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, hasStoredUpdateChannel, saveCloudSyncKey, saveSettings } from './store.js'
-import { readCodexUsageSummary } from './usageProvider.js'
+import { readCodexUsageSummaryInWorker } from './usageWorkerClient.js'
 import { fetchOfficialAccountUsage } from './accountUsageProvider.js'
 import { recordOfficialUsageSnapshot } from './accountUsageHistory.js'
 import { getOrCreateDeviceProfile } from './deviceIdentity.js'
@@ -37,6 +37,7 @@ let widgetAlwaysOnTop = false
 let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
 let latestCloudSync: CloudSyncResult = { synced: false }
+let usageSummaryBuild: Promise<CodexUsageSummary> | undefined
 
 initializeMainDiagnostics()
 
@@ -262,16 +263,29 @@ function broadcastQuotaSnapshot(snapshot: QuotaSnapshot): void {
 
 ipcMain.handle('quota:refresh', async () => refreshQuotaAndBroadcast())
 
-async function buildUsageSummary() {
-  const localSummary = attachDeviceProfile(
-    readCodexUsageSummary(),
-    getOrCreateDeviceProfile(path.join(app.getPath('userData'), 'device-profile.json'), new Date(), app.getVersion())
-  )
-  const officialUsage = recordOfficialUsageSnapshot(
-    path.join(app.getPath('userData'), 'official-usage-history.json'),
-    await fetchOfficialAccountUsage()
-  )
-  return attachOfficialUsage(localSummary, officialUsage)
+function buildUsageSummary(): Promise<CodexUsageSummary> {
+  if (usageSummaryBuild) return usageSummaryBuild
+
+  const now = new Date()
+  const run = Promise.all([
+    readCodexUsageSummaryInWorker(now),
+    fetchOfficialAccountUsage()
+  ]).then(([summary, officialSnapshot]) => {
+    const localSummary = attachDeviceProfile(
+      summary,
+      getOrCreateDeviceProfile(path.join(app.getPath('userData'), 'device-profile.json'), now, app.getVersion())
+    )
+    const officialUsage = recordOfficialUsageSnapshot(
+      path.join(app.getPath('userData'), 'official-usage-history.json'),
+      officialSnapshot
+    )
+    return attachOfficialUsage(localSummary, officialUsage)
+  })
+
+  usageSummaryBuild = run.finally(() => {
+    usageSummaryBuild = undefined
+  })
+  return usageSummaryBuild
 }
 
 async function syncCloudUsage(summary?: CodexUsageSummary): Promise<CloudSyncResult> {
@@ -289,7 +303,7 @@ ipcMain.handle('usage:summary', async () => {
   const summary = await buildUsageSummary()
   const settings = getSettings()
   if (settings.cloudSyncEnabled && getCloudSyncKey()) {
-    void syncCloudUsage(summary)
+    await syncCloudUsage(summary)
   }
   return summary
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { aggregateDevices, normalizeDeviceName, parseDeviceUsage } from '../cloud/netlify/functions/_shared/schema'
 
-function envelope(deviceId: string, name: string, totalTokens: number) {
+function envelope(deviceId: string, name: string, totalTokens: number, deviceExtra: Record<string, unknown> = {}) {
   const total = {
     inputTokens: totalTokens - 30,
     cachedInputTokens: 10,
@@ -13,7 +13,7 @@ function envelope(deviceId: string, name: string, totalTokens: number) {
   return {
     schemaVersion: 1,
     generatedAt: '2026-07-12T08:00:00.000Z',
-    device: { id: deviceId, name, platform: 'win32', createdAt: '2026-07-01T00:00:00.000Z' },
+    device: { id: deviceId, name, platform: 'win32', createdAt: '2026-07-01T00:00:00.000Z', ...deviceExtra },
     periods: { today: period, sevenDays: period, month: period },
     dailyUsage: [{ date: '2026-07-12', events: 1, total, apiEstimateUsd: 0.01 }],
     dataQuality: { score: 96, level: 'good', files: 2, tokenEvents: 1 }
@@ -45,6 +45,60 @@ describe('cloud usage schema', () => {
 
   it('rejects payloads that do not match the device envelope', () => {
     expect(parseDeviceUsage({ prompt: 'private content' }, new Date().toISOString())).toBeNull()
+  })
+
+  it('keeps app updates from creating duplicate physical devices', () => {
+    const stableKey = 'machine_1234567890123456789012345678901234567890'
+    const oldDevice = parseDeviceUsage(
+      envelope('device_old', 'Office PC', 100, { stableKey, appVersion: '0.2.0-beta.1' }),
+      '2026-07-12T08:01:00.000Z'
+    )
+    const updatedDevice = parseDeviceUsage(
+      envelope('device_new', 'Office PC', 300, { stableKey, appVersion: '0.2.0-beta.4' }),
+      '2026-07-12T09:01:00.000Z'
+    )
+    const result = aggregateDevices([oldDevice!, updatedDevice!], new Date('2026-07-12T10:00:00.000Z'))
+
+    expect(result.deviceCount).toBe(1)
+    expect(result.dailyUsage[0]).toMatchObject({
+      date: '2026-07-12',
+      totalTokens: 300,
+      devices: { device_new: 300 }
+    })
+    expect(result.devices[0].device).toMatchObject({ id: 'device_new', appVersion: '0.2.0-beta.4' })
+  })
+
+  it('derives today and seven-day totals from dated device contributions', () => {
+    const currentPayload = envelope('device_current', 'Current PC', 300)
+    currentPayload.generatedAt = '2026-07-16T02:00:00.000Z'
+    currentPayload.dailyUsage[0].date = '2026-07-16'
+    const stalePayload = envelope('device_stale', 'Offline laptop', 100)
+    stalePayload.generatedAt = '2026-07-14T02:00:00.000Z'
+    stalePayload.dailyUsage[0].date = '2026-07-14'
+
+    const current = parseDeviceUsage(currentPayload, '2026-07-16T02:01:00.000Z')
+    const stale = parseDeviceUsage(stalePayload, '2026-07-14T02:01:00.000Z')
+    const result = aggregateDevices([current!, stale!], new Date('2026-07-16T04:00:00.000Z'))
+
+    expect(result.periods.today.total.totalTokens).toBe(300)
+    expect(result.periods.sevenDays.total.totalTokens).toBe(400)
+    expect(result.devices.reduce((sum, item) => sum + item.contribution.todayTokens, 0)).toBe(300)
+    expect(result.devices.reduce((sum, item) => sum + item.contribution.sevenDaysTokens, 0)).toBe(400)
+  })
+
+  it('does not carry a previous-month snapshot into the current month total', () => {
+    const currentPayload = envelope('device_current', 'Current PC', 300)
+    currentPayload.generatedAt = '2026-07-16T02:00:00.000Z'
+    currentPayload.dailyUsage[0].date = '2026-07-16'
+    const previousPayload = envelope('device_previous', 'Offline laptop', 900)
+    previousPayload.generatedAt = '2026-06-30T02:00:00.000Z'
+    previousPayload.dailyUsage[0].date = '2026-06-30'
+
+    const current = parseDeviceUsage(currentPayload, '2026-07-16T02:01:00.000Z')
+    const previous = parseDeviceUsage(previousPayload, '2026-06-30T02:01:00.000Z')
+    const result = aggregateDevices([current!, previous!], new Date('2026-07-16T04:00:00.000Z'))
+
+    expect(result.periods.month.total.totalTokens).toBe(300)
   })
 
   it('deduplicates cross-device events and keeps one official account bucket', () => {

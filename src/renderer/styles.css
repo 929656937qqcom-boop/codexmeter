@@ -164,6 +164,14 @@ svg {
   opacity: 0.64;
 }
 
+.dashboard-refresh.is-loading svg {
+  animation: dashboard-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes dashboard-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
 .window-control-strip {
   display: flex;
   align-items: center;

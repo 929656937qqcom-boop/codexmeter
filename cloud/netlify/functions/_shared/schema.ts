@@ -3,7 +3,7 @@ export interface StoredDeviceUsage {
   receivedAt: string
   generatedAt: string
   accountFingerprint?: string
-  device: { id: string; name: string; platform: string; arch?: string; appVersion?: string; createdAt: string }
+  device: { id: string; stableKey?: string; name: string; platform: string; arch?: string; appVersion?: string; createdAt: string }
   periods: Record<'today' | 'sevenDays' | 'month', UsagePeriod>
   dailyUsage: DailyUsage[]
   officialUsage?: { available: boolean; fetchedAt: string; dailyUsage: Array<{ date: string; tokens: number }> }
@@ -116,6 +116,7 @@ export function parseDeviceUsage(value: unknown, receivedAt: string): StoredDevi
     accountFingerprint,
     device: {
       id: String(device.id),
+      stableKey: safeFingerprint(device.stableKey) ? String(device.stableKey) : undefined,
       name: String(device.name).slice(0, 120),
       platform: String(device.platform).slice(0, 32),
       arch: safeText(device.arch, 32) ? String(device.arch) : undefined,
@@ -138,14 +139,18 @@ export function parseDeviceUsage(value: unknown, receivedAt: string): StoredDevi
 }
 
 export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
-  const devices = [...input].sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))
+  const devices = latestByPhysicalDevice(input)
   const daily = new Map<string, AggregateDay>()
   const periods = { today: emptyPeriod(), sevenDays: emptyPeriod(), month: emptyPeriod() }
   const seenEvents = new Map<string, string>()
   let duplicateEvents = 0
+  const today = shanghaiDateKey(now)
+  const monthStart = today.slice(0, 8) + '01'
+  const sevenDayKeys = new Set(Array.from({ length: 7 }, (_, index) => shanghaiDateKey(new Date(now.getTime() - index * 86_400_000))))
 
   for (const item of devices) {
-    for (const key of ['today', 'sevenDays', 'month'] as const) addPeriod(periods[key], item.periods[key])
+    const snapshotDate = shanghaiDateKey(new Date(item.generatedAt))
+    if (snapshotDate >= monthStart && snapshotDate <= today) addPeriod(periods.month, item.periods.month)
     for (const day of item.dailyUsage) addDaily(daily, day, item.device.id)
   }
 
@@ -161,6 +166,8 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
       subtractDuplicate(daily, periods, event, item.device.id, now)
     }
   }
+  periods.today = periodFromDaily(daily, new Set([today]))
+  periods.sevenDays = periodFromDaily(daily, sevenDayKeys)
   for (const period of Object.values(periods)) period.apiEstimateUsd = estimateApiValue(period.total)
 
   const officialByDate = new Map<string, { date: string; tokens: number; fetchedAt: string }>()
@@ -185,8 +192,6 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
       devices: day.devices,
       projects: [...day.projects.values()].sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 8)
     }))
-  const today = shanghaiDateKey(now)
-  const sevenDayKeys = new Set(Array.from({ length: 7 }, (_, index) => shanghaiDateKey(new Date(now.getTime() - index * 86_400_000))))
   const deviceTotals = new Map<string, number>()
   for (const day of daily.values()) {
     for (const [deviceId, tokens] of Object.entries(day.devices)) {
@@ -226,6 +231,28 @@ export function aggregateDevices(input: StoredDeviceUsage[], now = new Date()) {
       }
     })
   }
+}
+
+function periodFromDaily(daily: Map<string, AggregateDay>, dateKeys: Set<string>): UsagePeriod {
+  const period = emptyPeriod()
+  for (const day of daily.values()) {
+    if (!dateKeys.has(day.date)) continue
+    period.events += day.events
+    addTotals(period.total, day.total)
+  }
+  return period
+}
+
+function latestByPhysicalDevice(input: StoredDeviceUsage[]): StoredDeviceUsage[] {
+  const latest = new Map<string, StoredDeviceUsage>()
+  for (const item of [...input].sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))) {
+    latest.set(physicalDeviceKey(item), item)
+  }
+  return [...latest.values()].sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))
+}
+
+function physicalDeviceKey(item: StoredDeviceUsage): string {
+  return item.device.stableKey ?? item.device.id
 }
 
 export function normalizeDeviceName(value: unknown): string | null {
