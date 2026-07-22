@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { NoopDeviceBridge } from './deviceBridge.js'
@@ -38,6 +38,8 @@ let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
 let latestCloudSync: CloudSyncResult = { synced: false }
 let usageSummaryBuild: Promise<CodexUsageSummary> | undefined
+let promptedUpdateVersion: string | undefined
+let updatePromptOpen = false
 
 initializeMainDiagnostics()
 
@@ -513,6 +515,35 @@ ipcMain.handle('updates:install', () => {
 function broadcastUpdateState(state: UpdateState): void {
   mainWindow?.webContents.send('updates:state', state)
   widgetWindow?.webContents.send('updates:state', state)
+  if (state.status === 'downloaded') {
+    void promptForDownloadedUpdate(state)
+  }
+}
+
+async function promptForDownloadedUpdate(state: UpdateState): Promise<void> {
+  const version = state.availableVersion
+  if (!version || updatePromptOpen || promptedUpdateVersion === version) return
+
+  promptedUpdateVersion = version
+  updatePromptOpen = true
+  try {
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      title: 'CodexMeter 更新',
+      message: `CodexMeter v${version} 已准备好`,
+      detail: '更新已在后台下载完成。现在重启即可自动安装，也可以稍后再处理。',
+      buttons: ['重启并安装', '稍后'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    })
+    if (result.response === 0) {
+      isQuitting = true
+      installDownloadedUpdate()
+    }
+  } finally {
+    updatePromptOpen = false
+  }
 }
 
 app.whenReady().then(async () => {

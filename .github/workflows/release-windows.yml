@@ -57,9 +57,10 @@ jobs:
           $notes = "Channel: ${{ inputs.channel }}`n`nAutomated Windows x64 build."
           $releaseArgs = @("release", "create", $tag, "--target", $env:GITHUB_SHA, "--title", $title, "--notes", $notes)
           if ("${{ inputs.channel }}" -eq "beta") { $releaseArgs += "--prerelease" }
-          gh @releaseArgs
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) { gh @releaseArgs }
           $metadata = if ("${{ inputs.channel }}" -eq "beta") { "release/beta.yml" } else { "release/latest.yml" }
-          gh release upload $tag "release/CodexMeter-Setup-${{ inputs.version }}.exe" "release/CodexMeter-Setup-${{ inputs.version }}.exe.blockmap" $metadata
+          gh release upload $tag "release/CodexMeter-Setup-${{ inputs.version }}.exe" "release/CodexMeter-Setup-${{ inputs.version }}.exe.blockmap" $metadata --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: CodexMeter-Windows-${{ inputs.version }}
