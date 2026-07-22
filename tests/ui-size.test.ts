@@ -54,6 +54,8 @@ describe('desktop sizing', () => {
     expect(mainSource).toContain('resizable: true')
     expect(mainSource).toContain('frame: false')
     expect(mainSource).toContain('transparent: true')
+    expect(mainSource.match(/acceptFirstMouse: true/g)).toHaveLength(2)
+    expect(mainSource.match(/setIgnoreMouseEvents\(false\)/g)?.length).toBeGreaterThanOrEqual(5)
     expect(mainSource).toContain("backgroundColor: '#00000000'")
   })
 
@@ -123,6 +125,8 @@ describe('desktop sizing', () => {
     expect(selectorBlock(stylesSource, '.dashboard-panel')).toContain('height: 100%')
     expect(selectorBlock(stylesSource, '.desktop-shell')).toContain('-webkit-app-region: no-drag')
     expect(selectorBlock(stylesSource, '.dashboard-header')).toContain('-webkit-app-region: drag')
+    expect(stylesSource).toContain('.dashboard-actions *')
+    expect(stylesSource).toContain('[role="button"]')
     expect(selectorNumericProperty(stylesSource, '.dashboard-panel', 'border-radius')).toBeLessThanOrEqual(20)
     expect(selectorNumericProperty(stylesSource, '.window-control-button', 'width')).toBeLessThanOrEqual(30)
     expect(selectorNumericProperty(stylesSource, '.window-control-button', 'height')).toBeLessThanOrEqual(30)

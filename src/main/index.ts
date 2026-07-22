@@ -65,6 +65,7 @@ async function createWindow(): Promise<void> {
     useContentSize: true,
     frame: false,
     transparent: true,
+    acceptFirstMouse: true,
     resizable: true,
     maximizable: true,
     title: 'CodexMeter',
@@ -79,6 +80,7 @@ async function createWindow(): Promise<void> {
       sandbox: false
     }
   })
+  mainWindow.setIgnoreMouseEvents(false)
   Menu.setApplicationMenu(null)
   monitorRendererDiagnostics(mainWindow)
   mainWindow.webContents.on('select-bluetooth-device', (event, devices, callback) => {
@@ -112,6 +114,7 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'))
   }
+  mainWindow.setIgnoreMouseEvents(false)
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -139,6 +142,7 @@ async function createWidgetWindow(): Promise<BrowserWindow> {
     frame: false,
     skipTaskbar: true,
     transparent: true,
+    acceptFirstMouse: true,
     alwaysOnTop: widgetAlwaysOnTop,
     title: 'CodexMeter Widget',
     icon: appIconPath,
@@ -151,6 +155,7 @@ async function createWidgetWindow(): Promise<BrowserWindow> {
       sandbox: false
     }
   })
+  widgetWindow.setIgnoreMouseEvents(false)
   monitorRendererDiagnostics(widgetWindow)
 
   widgetWindow.on('closed', () => {
@@ -164,6 +169,7 @@ async function createWidgetWindow(): Promise<BrowserWindow> {
       query: { view: 'widget' }
     })
   }
+  widgetWindow.setIgnoreMouseEvents(false)
 
   return widgetWindow
 }
@@ -190,6 +196,7 @@ async function showMainWindow(): Promise<{ visible: boolean }> {
   if (mainWindow.isMinimized()) {
     mainWindow.restore()
   }
+  mainWindow.setIgnoreMouseEvents(false)
   mainWindow.show()
   mainWindow.focus()
 
@@ -450,6 +457,7 @@ ipcMain.handle('widget:setVisible', async (_event, visible: boolean, alwaysOnTop
   if (visible) {
     const window = await createWidgetWindow()
     window.setAlwaysOnTop(widgetAlwaysOnTop)
+    window.setIgnoreMouseEvents(false)
     window.show()
   } else if (widgetWindow && !widgetWindow.isDestroyed()) {
     widgetWindow.hide()
