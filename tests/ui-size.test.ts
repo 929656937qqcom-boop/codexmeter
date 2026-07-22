@@ -148,6 +148,8 @@ describe('desktop sizing', () => {
     expect(mainSource).toContain('readCodexUsageSummaryInWorker')
     expect(mainSource).toContain('usageSummaryBuild')
     expect(mainSource).toContain('fetchOfficialAccountUsage')
+    expect(mainSource).toContain('queueCloudQuotaSync(snapshot)')
+    expect(mainSource).toContain('syncDeviceQuota')
   })
 
   it('starts the widget as a compact floating ball', () => {

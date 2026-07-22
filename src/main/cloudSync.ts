@@ -42,6 +42,27 @@ export async function syncDeviceUsage(endpoint: string, summary: CodexUsageSumma
   }
 }
 
+export async function syncDeviceQuota(endpoint: string, deviceId: string, quota: QuotaSnapshot): Promise<CloudSyncResult> {
+  const key = getCloudSyncKey()
+  if (!key) return { synced: false, error: '尚未生成同步密钥' }
+  try {
+    const response = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'CodexMeter/0.1'
+      },
+      signal: AbortSignal.timeout(syncTimeoutMs),
+      body: JSON.stringify({ deviceId, quota })
+    })
+    if (!response.ok) return { synced: false, error: `云端额度同步失败 (${response.status})` }
+    return { synced: true, syncedAt: new Date().toISOString() }
+  } catch (error) {
+    return { synced: false, error: cloudErrorMessage(error, '云端额度同步失败') }
+  }
+}
+
 export async function createPairingCode(endpoint: string): Promise<{ code: string; expiresAt: string }> {
   const key = getCloudSyncKey()
   if (!key) throw new Error('请先生成同步密钥')

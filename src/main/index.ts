@@ -9,7 +9,7 @@ import { readCodexUsageSummaryInWorker } from './usageWorkerClient.js'
 import { fetchOfficialAccountUsage } from './accountUsageProvider.js'
 import { recordOfficialUsageSnapshot } from './accountUsageHistory.js'
 import { getOrCreateDeviceProfile } from './deviceIdentity.js'
-import { createCloudSyncKey, createPairingCode, redeemPairingCode, syncDeviceUsage, type CloudSyncResult } from './cloudSync.js'
+import { createCloudSyncKey, createPairingCode, redeemPairingCode, syncDeviceQuota, syncDeviceUsage, type CloudSyncResult } from './cloudSync.js'
 import { initializeMainDiagnostics, monitorRendererDiagnostics, reportDiagnostic } from './diagnostics.js'
 import { changeUpdateChannel, checkForUpdates, getUpdateState, initializeUpdater, installDownloadedUpdate } from './updater.js'
 import { HttpDeviceBridge, type DeviceBridge } from '../shared/device.js'
@@ -232,7 +232,20 @@ async function refreshQuotaAndBroadcast(): Promise<QuotaSnapshot> {
     console.warn('Hardware display push failed:', error)
   }
   broadcastQuotaSnapshot(snapshot)
+  queueCloudQuotaSync(snapshot)
   return snapshot
+}
+
+function queueCloudQuotaSync(snapshot: QuotaSnapshot): void {
+  const settings = getSettings()
+  if (!settings.cloudSyncEnabled || !getCloudSyncKey()) return
+  const profile = getOrCreateDeviceProfile(path.join(app.getPath('userData'), 'device-profile.json'), new Date(), app.getVersion())
+  void syncDeviceQuota(settings.cloudEndpoint, profile.id, snapshot).then((result) => {
+    latestCloudSync = result
+    if (!result.synced && result.error) {
+      void reportDiagnostic({ kind: 'cloud-sync-error', message: result.error, operation: 'sync-device-quota' })
+    }
+  })
 }
 
 async function pushLatestSnapshotToDevice(): Promise<{ pushed: boolean; pushedAt: string }> {

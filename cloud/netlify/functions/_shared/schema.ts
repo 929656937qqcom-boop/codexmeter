@@ -460,7 +460,7 @@ function parseOfficialUsage(value: unknown): StoredDeviceUsage['officialUsage'] 
   return { available: item.available, fetchedAt: String(item.fetchedAt), dailyUsage }
 }
 
-function parseQuota(value: unknown): StoredQuota | undefined {
+export function parseQuota(value: unknown): StoredQuota | undefined {
   const item = record(value)
   if (!item || typeof item.available !== 'boolean' || !isoDate(item.refreshedAt)) return undefined
   const source = item.source === 'codex' || item.source === 'sample' || item.source === 'unavailable' ? item.source : 'unavailable'

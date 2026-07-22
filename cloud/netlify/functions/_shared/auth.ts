@@ -8,6 +8,7 @@ export interface AuthContext {
   namespace: string
   credentialType: 'master' | 'device'
   credentialHash: string
+  deviceId?: string
 }
 
 export async function authenticate(req: Request, store: BlobReader): Promise<AuthContext | null> {
@@ -20,8 +21,10 @@ export async function authenticate(req: Request, store: BlobReader): Promise<Aut
   const device = authorization.match(/^Bearer\s+(cm_device_[A-Za-z0-9_-]{32,})$/)
   if (!device) return null
   const credentialHash = hash(device[1])
-  const mapping = await store.get(`auth/device-tokens/${credentialHash}.json`, { type: 'json' }) as { namespace?: string } | null
-  return mapping?.namespace ? { namespace: mapping.namespace, credentialType: 'device', credentialHash } : null
+  const mapping = await store.get(`auth/device-tokens/${credentialHash}.json`, { type: 'json' }) as { namespace?: string; deviceId?: string } | null
+  return mapping?.namespace
+    ? { namespace: mapping.namespace, credentialType: 'device', credentialHash, deviceId: mapping.deviceId }
+    : null
 }
 
 export function hash(value: string): string {

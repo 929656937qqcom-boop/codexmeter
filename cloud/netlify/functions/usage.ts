@@ -1,7 +1,7 @@
 import { getStore } from '@netlify/blobs'
 import type { Config } from '@netlify/functions'
 import { authenticate } from './_shared/auth.js'
-import { aggregateDevices, normalizeDeviceName, parseDeviceUsage, type StoredDeviceUsage } from './_shared/schema.js'
+import { aggregateDevices, normalizeDeviceName, parseDeviceUsage, parseQuota, type StoredDeviceUsage } from './_shared/schema.js'
 
 const headers = {
   'content-type': 'application/json; charset=utf-8',
@@ -41,13 +41,27 @@ export default async function usage(req: Request): Promise<Response> {
   }
 
   if (req.method === 'PATCH') {
-    const body = await req.json().catch(() => null) as { deviceId?: unknown; name?: unknown } | null
+    const body = await req.json().catch(() => null) as { deviceId?: unknown; name?: unknown; quota?: unknown } | null
     const deviceId = typeof body?.deviceId === 'string' ? body.deviceId : ''
-    const name = normalizeDeviceName(body?.name)
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(deviceId)) return json({ error: '设备 ID 无效' }, 422)
+    if (auth.credentialType === 'device') {
+      if (!auth.deviceId) return json({ error: '请先完成本设备首次完整同步' }, 409)
+      if (auth.deviceId !== deviceId) return json({ error: '设备凭据不能更新其他设备' }, 403)
+    }
+    const deviceKey = `${prefix}${deviceId}.json`
+    const device = await store.get(deviceKey, { type: 'json' }) as StoredDeviceUsage | null
+    if (!device) return json({ error: '设备不存在，请先完成一次完整同步' }, 404)
+
+    if (body && Object.prototype.hasOwnProperty.call(body, 'quota')) {
+      const quota = parseQuota(body.quota)
+      if (!quota) return json({ error: '额度快照格式无效' }, 422)
+      const receivedAt = new Date().toISOString()
+      await store.setJSON(deviceKey, { ...device, quota, receivedAt })
+      return json({ ok: true, deviceId, receivedAt, quotaRefreshedAt: quota.refreshedAt })
+    }
+
+    const name = normalizeDeviceName(body?.name)
     if (!name) return json({ error: '设备名称需为 1-32 个字符' }, 422)
-    const device = await store.get(`${prefix}${deviceId}.json`, { type: 'json' })
-    if (!device) return json({ error: '设备不存在' }, 404)
     await store.setJSON(`${aliasPrefix}${deviceId}.json`, { name, updatedAt: new Date().toISOString() })
     return json({ ok: true, deviceId, name })
   }

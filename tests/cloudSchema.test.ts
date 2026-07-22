@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateDevices, normalizeDeviceName, parseDeviceUsage } from '../cloud/netlify/functions/_shared/schema'
+import { aggregateDevices, normalizeDeviceName, parseDeviceUsage, parseQuota } from '../cloud/netlify/functions/_shared/schema'
 
 function envelope(deviceId: string, name: string, totalTokens: number, deviceExtra: Record<string, unknown> = {}) {
   const total = {
@@ -45,6 +45,17 @@ describe('cloud usage schema', () => {
 
   it('rejects payloads that do not match the device envelope', () => {
     expect(parseDeviceUsage({ prompt: 'private content' }, new Date().toISOString())).toBeNull()
+  })
+
+  it('validates lightweight quota snapshots independently from token summaries', () => {
+    expect(parseQuota({
+      available: true,
+      refreshedAt: '2026-07-22T02:00:00.000Z',
+      source: 'codex',
+      windows: [{ code: '7d', percentUsed: 17, resetAt: '2026-07-29T01:02:00.000Z' }],
+      resetCards: []
+    })).toMatchObject({ available: true, windows: [{ code: '7d', percentUsed: 17 }] })
+    expect(parseQuota({ available: true, refreshedAt: 'not-a-date', windows: [] })).toBeUndefined()
   })
 
   it('keeps app updates from creating duplicate physical devices', () => {
