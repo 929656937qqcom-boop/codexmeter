@@ -3,6 +3,7 @@ import { parseQuotaPayload, parseResetCreditsPayload, unavailableQuotaSnapshot, 
 
 const usageEndpoint = 'https://chatgpt.com/backend-api/wham/usage'
 const resetCreditsEndpoint = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits'
+const requestTimeoutMs = 15_000
 
 export async function fetchQuotaSnapshot(): Promise<QuotaSnapshot> {
   const token = getCodexOAuth()
@@ -22,7 +23,8 @@ export async function fetchQuotaSnapshot(): Promise<QuotaSnapshot> {
 
   const response = await fetch(usageEndpoint, {
     method: 'GET',
-    headers: sharedHeaders
+    headers: sharedHeaders,
+    signal: AbortSignal.timeout(requestTimeoutMs)
   })
 
   if (!response.ok) {
@@ -48,7 +50,8 @@ async function fetchResetCards(headers: Record<string, string>): Promise<QuotaSn
   try {
     const response = await fetch(resetCreditsEndpoint, {
       method: 'GET',
-      headers
+      headers,
+      signal: AbortSignal.timeout(requestTimeoutMs)
     })
     if (!response.ok) {
       return undefined

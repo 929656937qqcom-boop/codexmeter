@@ -92,7 +92,6 @@ const aboutVisible = ref(false)
 const diagnosticsEnabled = ref(false)
 const updateState = ref<UpdateState>({ currentVersion: '0.1.0', channel: 'latest', status: 'idle' })
 let unsubscribeQuota: (() => void) | undefined
-let refreshTimer: ReturnType<typeof setInterval> | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 let removeCopyListener: (() => void) | undefined
 let unsubscribeHardwarePush: (() => void) | undefined
@@ -377,7 +376,6 @@ onMounted(async () => {
   if (isWidgetView) {
     settings.value = window.codexMeter ? await window.codexMeter.getSettings() : null
     snapshot.value = window.codexMeter ? await window.codexMeter.getLatestQuota() : sampleQuotaSnapshot()
-    configureAutoRefresh(settings.value?.refreshIntervalMinutes || 5)
     return
   }
 
@@ -417,7 +415,6 @@ onMounted(async () => {
 
   await refreshQuota()
   await refreshUsageSummary()
-  configureAutoRefresh(settings.value?.refreshIntervalMinutes ?? 5)
 })
 
 onUnmounted(() => {
@@ -426,7 +423,6 @@ onUnmounted(() => {
   unsubscribeUpdateState?.()
   removeCopyListener?.()
   removeDiagnosticListeners?.()
-  clearAutoRefresh()
   clearNotice()
 })
 
@@ -649,7 +645,6 @@ async function updateInterval(value: number): Promise<void> {
         updateChannel: settings.value?.updateChannel ?? 'latest',
         diagnosticsEnabled: settings.value?.diagnosticsEnabled ?? false
       }
-  configureAutoRefresh(settings.value.refreshIntervalMinutes)
 }
 
 async function saveHardwareDisplay(enabled = true): Promise<void> {
@@ -805,24 +800,6 @@ async function sendBlePayload(payload: unknown, successText: string): Promise<vo
     hardwareStatusText.value = '蓝牙数据发送失败，请重新连接小屏。'
   } finally {
     hardwareSaving.value = false
-  }
-}
-
-function configureAutoRefresh(minutes: RefreshIntervalMinutes): void {
-  clearAutoRefresh()
-  if (minutes === 0) {
-    return
-  }
-
-  refreshTimer = setInterval(() => {
-    void refreshQuota()
-  }, minutes * 60 * 1000)
-}
-
-function clearAutoRefresh(): void {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = undefined
   }
 }
 

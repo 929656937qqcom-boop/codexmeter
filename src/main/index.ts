@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { NoopDeviceBridge } from './deviceBridge.js'
 import { cancelCodexOAuth, startCodexOAuth } from './oauth.js'
 import { fetchQuotaSnapshot } from './quotaProvider.js'
-import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, hasStoredUpdateChannel, saveCloudSyncKey, saveSettings } from './store.js'
+import { clearCodexOAuth, getCloudSyncKey, getCodexOAuth, getSettings, saveCloudSyncKey, saveSettings } from './store.js'
 import { readCodexUsageSummaryInWorker } from './usageWorkerClient.js'
 import { fetchOfficialAccountUsage } from './accountUsageProvider.js'
 import { recordOfficialUsageSnapshot } from './accountUsageHistory.js'
@@ -38,6 +38,8 @@ let deviceBridge: DeviceBridge = createDeviceBridge()
 let bluetoothSelectTimer: NodeJS.Timeout | undefined
 let latestCloudSync: CloudSyncResult = { synced: false }
 let usageSummaryBuild: Promise<CodexUsageSummary> | undefined
+let quotaRefreshInFlight: Promise<QuotaSnapshot> | undefined
+let quotaRefreshTimer: NodeJS.Timeout | undefined
 let promptedUpdateVersion: string | undefined
 let updatePromptOpen = false
 
@@ -225,17 +227,54 @@ function createTray(): void {
   tray.on('double-click', () => void showMainWindow())
 }
 
-async function refreshQuotaAndBroadcast(): Promise<QuotaSnapshot> {
-  const snapshot = await fetchQuotaSnapshot()
-  try {
-    await deviceBridge.sendSnapshot(snapshot)
-    broadcastHardwarePush()
-  } catch (error) {
-    console.warn('Hardware display push failed:', error)
+function refreshQuotaAndBroadcast(): Promise<QuotaSnapshot> {
+  if (quotaRefreshInFlight) return quotaRefreshInFlight
+
+  const run = (async () => {
+    const snapshot = await fetchQuotaSnapshot()
+    try {
+      await deviceBridge.sendSnapshot(snapshot)
+      broadcastHardwarePush()
+    } catch (error) {
+      console.warn('Hardware display push failed:', error)
+    }
+    broadcastQuotaSnapshot(snapshot)
+    queueCloudQuotaSync(snapshot)
+    return snapshot
+  })()
+
+  quotaRefreshInFlight = run.finally(() => {
+    quotaRefreshInFlight = undefined
+  })
+  return quotaRefreshInFlight
+}
+
+function configureQuotaRefreshSchedule(): void {
+  if (quotaRefreshTimer) {
+    clearInterval(quotaRefreshTimer)
+    quotaRefreshTimer = undefined
   }
-  broadcastQuotaSnapshot(snapshot)
-  queueCloudQuotaSync(snapshot)
-  return snapshot
+
+  const minutes = getSettings().refreshIntervalMinutes
+  if (minutes === 0) return
+  quotaRefreshTimer = setInterval(() => refreshQuotaInBackground('scheduled-refresh'), minutes * 60 * 1_000)
+  quotaRefreshTimer.unref()
+}
+
+function refreshQuotaInBackground(operation: string): void {
+  void refreshQuotaAndBroadcast().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    void reportDiagnostic({ kind: 'main-error', message, operation })
+  })
+}
+
+function isLatestSnapshotFresh(): boolean {
+  if (!latestSnapshot) return false
+  const refreshedAt = new Date(latestSnapshot.refreshedAt).getTime()
+  if (!Number.isFinite(refreshedAt)) return false
+  const minutes = getSettings().refreshIntervalMinutes
+  if (minutes === 0) return true
+  return Date.now() - refreshedAt < minutes * 60 * 1_000
 }
 
 function queueCloudQuotaSync(snapshot: QuotaSnapshot): void {
@@ -331,7 +370,7 @@ ipcMain.handle('usage:summary', async () => {
 })
 
 ipcMain.handle('quota:latest', async () => {
-  if (latestSnapshot) {
+  if (isLatestSnapshotFresh() && latestSnapshot) {
     return latestSnapshot
   }
 
@@ -345,10 +384,12 @@ ipcMain.handle('settings:saveRefreshInterval', (_event, minutes: number) => {
     throw new Error(`Unsupported refresh interval: ${minutes}`)
   }
 
-  return saveSettings({
+  const settings = saveSettings({
     ...getSettings(),
     refreshIntervalMinutes: minutes
   })
+  configureQuotaRefreshSchedule()
+  return settings
 })
 
 ipcMain.handle('settings:saveDiagnostics', (_event, enabled: boolean) => saveSettings({
@@ -548,13 +589,16 @@ async function promptForDownloadedUpdate(state: UpdateState): Promise<void> {
 
 app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.setIcon(nativeImage.createFromPath(appIconPath))
-  if (!hasStoredUpdateChannel() && app.getVersion().includes('-beta')) {
+  if (app.getVersion().includes('-beta') && getSettings().updateChannel !== 'beta') {
     saveSettings({ ...getSettings(), updateChannel: 'beta' })
   }
   configureBluetoothPermissions()
   const window = await createWidgetWindow()
   window.show()
   createTray()
+  configureQuotaRefreshSchedule()
+  powerMonitor.on('resume', () => refreshQuotaInBackground('system-resume'))
+  powerMonitor.on('unlock-screen', () => refreshQuotaInBackground('screen-unlock'))
   initializeUpdater(getSettings().updateChannel, broadcastUpdateState)
 })
 
