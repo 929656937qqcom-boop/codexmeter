@@ -41,6 +41,7 @@ export interface UsageDataQuality {
   incrementalEvents: number
   fallbackEvents: number
   invalidEvents: number
+  forkInheritedTokenEvents?: number
   notes: string[]
 }
 
@@ -310,7 +311,16 @@ export function analyzeCodexUsageEvents(
     sevenDays: emptyPeriod(),
     month: emptyPeriod()
   }
-  const sessions = new Map<string, { id: string; cwd: string; lastActive: string; title: string; userMessages: number }>()
+  const sessions = new Map<string, {
+    id: string
+    cwd: string
+    lastActive: string
+    title: string
+    userMessages: number
+    forkCreatedAt?: number
+    forkBootstrapActive?: boolean
+    forkBootstrapLastTokenAt?: number
+  }>()
   const projects = new Map<string, UsageProjectSummary>()
   const projectSessionKeys = new Map<string, Set<string>>()
   const threads = new Map<string, UsageThreadSummary>()
@@ -327,6 +337,7 @@ export function analyzeCodexUsageEvents(
   let tokenEvents = 0
   let incrementalEvents = 0
   let fallbackEvents = 0
+  let inheritedForkTokenEvents = 0
 
   for (const event of events) {
     sourceFiles.add(event.file)
@@ -339,10 +350,22 @@ export function analyzeCodexUsageEvents(
     const sessionKey = event.file
 
     if (event.type === 'session_meta') {
+      // Fork files begin with their own metadata, followed by a copied parent
+      // session_meta. The first record is authoritative for this physical file.
+      if (sessions.has(sessionKey)) continue
       const cwd = stringValue(payload?.cwd) ?? ''
       const id = stringValue(payload?.id) ?? sessionKey
+      const forkedFromId = stringValue(payload?.forked_from_id)
       const lastActive = timestamp?.toISOString() ?? ''
-      sessions.set(sessionKey, { id, cwd, lastActive, title: '', userMessages: 0 })
+      sessions.set(sessionKey, {
+        id,
+        cwd,
+        lastActive,
+        title: '',
+        userMessages: 0,
+        forkCreatedAt: forkedFromId && timestamp ? timestamp.getTime() : undefined,
+        forkBootstrapActive: Boolean(forkedFromId && timestamp)
+      })
       continue
     }
 
@@ -355,6 +378,21 @@ export function analyzeCodexUsageEvents(
     sessions.set(sessionKey, session)
 
     if (event.type === 'event_msg' && payload?.type === 'token_count') {
+      // Codex serializes the parent's complete token_count history into a new
+      // fork file in a tight burst at creation time. Those are copied records,
+      // not new model calls; later token events remain real branch usage.
+      if (session.forkBootstrapActive && session.forkCreatedAt !== undefined) {
+        const eventAt = timestamp.getTime()
+        const lastBootstrapAt = session.forkBootstrapLastTokenAt
+        const startsNearForkCreation = lastBootstrapAt === undefined && eventAt - session.forkCreatedAt <= 2_000
+        const continuesImportedBurst = lastBootstrapAt !== undefined && eventAt - lastBootstrapAt <= 250
+        if (startsNearForkCreation || continuesImportedBurst) {
+          session.forkBootstrapLastTokenAt = eventAt
+          inheritedForkTokenEvents += 1
+          continue
+        }
+        session.forkBootstrapActive = false
+      }
       const info = asRecord(payload.info)
       const lastUsage = asRecord(info?.last_token_usage)
       const totalUsage = asRecord(info?.total_token_usage)
@@ -471,7 +509,14 @@ export function analyzeCodexUsageEvents(
         return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
       })
       .slice(0, 8),
-    dataQuality: buildDataQuality(sourceFiles.size, tokenEvents, incrementalEvents, fallbackEvents, invalidEvents),
+    dataQuality: buildDataQuality(
+      sourceFiles.size,
+      tokenEvents,
+      incrementalEvents,
+      fallbackEvents,
+      invalidEvents,
+      inheritedForkTokenEvents
+    ),
     boundaryNote: '本机日志粗估，不代表 OpenAI/Codex 账号全量用量或实际账单。',
     syncEventSources
   }
@@ -510,7 +555,8 @@ function buildDataQuality(
   tokenEvents: number,
   incrementalEvents: number,
   fallbackEvents: number,
-  invalidEvents: number
+  invalidEvents: number,
+  inheritedForkTokenEvents = 0
 ): UsageDataQuality {
   if (!tokenEvents) {
     return {
@@ -521,6 +567,7 @@ function buildDataQuality(
       incrementalEvents,
       fallbackEvents,
       invalidEvents,
+      forkInheritedTokenEvents: inheritedForkTokenEvents,
       notes: ['未找到 token_count 记录']
     }
   }
@@ -531,6 +578,7 @@ function buildDataQuality(
   const notes = ['临时线程、云端任务和未落盘调用不在本机日志内']
   if (fallbackEvents) notes.push(`${fallbackEvents} 条记录使用累计值回退，可能产生偏差`)
   if (invalidEvents) notes.push(`${invalidEvents} 条日志无法解析`)
+  if (inheritedForkTokenEvents) notes.push(`已排除 ${inheritedForkTokenEvents} 条分支继承的重复 token 记录`)
 
   return {
     score,
@@ -540,6 +588,7 @@ function buildDataQuality(
     incrementalEvents,
     fallbackEvents,
     invalidEvents,
+    forkInheritedTokenEvents: inheritedForkTokenEvents,
     notes
   }
 }

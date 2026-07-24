@@ -2,6 +2,91 @@ import { describe, expect, it } from 'vitest'
 import { analyzeCodexUsageEvents } from '../src/shared/usageAnalytics'
 
 describe('Codex local usage analytics', () => {
+  it('excludes copied token history from fork bootstrap while keeping new branch usage', () => {
+    const now = new Date('2026-07-24T04:00:00.000Z')
+    const tokenEvent = (file: string, timestamp: string, totalTokens: number) => ({
+      file,
+      type: 'event_msg',
+      timestamp,
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: {
+            input_tokens: totalTokens - 10,
+            cached_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: totalTokens
+          }
+        }
+      }
+    })
+    const events = [
+      {
+        file: 'parent.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-24T01:00:00.000Z',
+        payload: { id: 'parent', cwd: 'C:\\Work\\CodexMeter' }
+      },
+      tokenEvent('parent.jsonl', '2026-07-24T01:05:00.000Z', 100),
+      {
+        file: 'fork.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-24T02:00:00.000Z',
+        payload: { id: 'fork', forked_from_id: 'parent', cwd: 'C:\\Work\\CodexMeter' }
+      },
+      {
+        file: 'fork.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-24T02:00:00.001Z',
+        payload: { id: 'parent', cwd: 'C:\\Work\\CodexMeter' }
+      },
+      tokenEvent('fork.jsonl', '2026-07-24T02:00:00.010Z', 100),
+      tokenEvent('fork.jsonl', '2026-07-24T02:00:00.020Z', 110),
+      tokenEvent('fork.jsonl', '2026-07-24T02:00:03.000Z', 40)
+    ]
+
+    const summary = analyzeCodexUsageEvents(events, { now })
+
+    expect(summary.periods.today.total.totalTokens).toBe(140)
+    expect(summary.periods.today.events).toBe(2)
+    expect(summary.threads.map((thread) => thread.id)).toEqual(['parent', 'fork'])
+    expect(summary.threads.find((thread) => thread.id === 'fork')?.totalTokens).toBe(40)
+    expect(summary.dataQuality.forkInheritedTokenEvents).toBe(2)
+  })
+
+  it('counts the first token event when a fork has no imported token burst', () => {
+    const now = new Date('2026-07-24T04:00:00.000Z')
+    const summary = analyzeCodexUsageEvents([
+      {
+        file: 'empty-fork.jsonl',
+        type: 'session_meta',
+        timestamp: '2026-07-24T02:00:00.000Z',
+        payload: { id: 'empty-fork', forked_from_id: 'empty-parent', cwd: 'C:\\Work\\CodexMeter' }
+      },
+      {
+        file: 'empty-fork.jsonl',
+        type: 'event_msg',
+        timestamp: '2026-07-24T02:00:03.000Z',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: {
+              input_tokens: 30,
+              cached_input_tokens: 0,
+              output_tokens: 10,
+              reasoning_output_tokens: 0,
+              total_tokens: 40
+            }
+          }
+        }
+      }
+    ], { now })
+
+    expect(summary.periods.today.total.totalTokens).toBe(40)
+    expect(summary.dataQuality.forkInheritedTokenEvents).toBe(0)
+  })
+
   it('aggregates token_count events by period, project, tool, task, and API estimate', () => {
     const now = new Date('2026-07-08T04:30:00.000Z')
     const events = [
